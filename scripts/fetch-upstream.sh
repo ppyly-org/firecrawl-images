@@ -2,13 +2,14 @@
 set -euo pipefail
 
 readonly repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-readonly upstream_url="https://github.com/firecrawl/firecrawl.git"
+readonly upstream_url="${UPSTREAM_URL:-https://github.com/firecrawl/firecrawl.git}"
 readonly upstream_dir="$repo_root/vendor/firecrawl"
 readonly version="$(tr -d '\n' < "$repo_root/UPSTREAM_VERSION")"
 readonly expected_commit="$(tr -d '\n' < "$repo_root/UPSTREAM_COMMIT")"
 
 [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
 [[ "$expected_commit" =~ ^[0-9a-f]{40}$ ]]
+test -n "$upstream_url"
 
 if [[ -e "$upstream_dir" && ! -d "$upstream_dir/.git" ]]; then
   printf 'Refusing to replace non-Git path: %s\n' "$upstream_dir" >&2
