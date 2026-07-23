@@ -2,3 +2,24 @@
 /vendor/firecrawl/
 /.generated/
 /.test-upstream-pin/
+
+# Hermetic builder inputs and local container-engine state are never source.
+/.cache/
+/.docker/
+/.docker-buildx/
+/.buildx/
+/roots/
+/layers/
+/tars/
+/*.tar
+/*.tar.gz
+/*.tar.zst
+/*.deb
+/*.oci
+/*.log
+/*.token
+/*.tokens
+/.env
+/.env.*
+/prototype/
+/prototypes/

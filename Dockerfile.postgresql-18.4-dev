@@ -1,0 +1,49 @@
+FROM ghcr.io/cloudnative-pg/postgresql@sha256:8ff3abd13383e619797f974b4fcdda6de0c2cfdad90eb47e1cd95d41fe26bf80
+
+USER 0
+COPY --from=builder-debs / /builder-debs/
+
+RUN set -eux; \
+    test -d /builder-debs; \
+    test -f /builder-debs/SHA256SUMS; \
+    test -f /builder-debs/package-manifest.tsv; \
+    test -f /builder-debs/package-metadata.tsv; \
+    printf '%s\n' \
+      '96ce659c218735b33f3a5d1f26bebbb970dc623dc1d9e8c8efb3fe4406ceb1e6  /builder-debs/SHA256SUMS' \
+      '04028fd9d9cd50c439fe50805844b1a6ea9483d263d2d88d64f1d669d791f04c  /builder-debs/package-manifest.tsv' \
+      'ec966c9a926a23dbebbaa73d509836def5b2e6fe0a5e6fa2d8023a3391165849  /builder-debs/package-metadata.tsv' \
+      | sha256sum -c -; \
+    cd /builder-debs; \
+    sha256sum -c SHA256SUMS; \
+    tab="$(printf '\t')"; \
+    while IFS="$tab" read -r digest name version architecture source_name source_version; do \
+      test "$(dpkg-deb -f "./${digest}.deb" Package)" = "$name"; \
+      test "$(dpkg-deb -f "./${digest}.deb" Version)" = "$version"; \
+      test "$(dpkg-deb -f "./${digest}.deb" Architecture)" = "$architecture"; \
+      source="$(dpkg-deb -f "./${digest}.deb" Source || true)"; \
+      case "$source" in \
+        '') test "$source_name" = "$name"; test "$source_version" = "$version" ;; \
+        "$source_name") test "$source_version" = "$version" ;; \
+        "$source_name ($source_version)") ;; \
+        *) false ;; \
+      esac; \
+    done < package-metadata.tsv; \
+    dpkg-query -W -f='${Package}\t${Version}\t${Architecture}\n' | LC_ALL=C sort > /tmp/packages-before.tsv; \
+    while IFS="$tab" read -r name version architecture; do \
+      test -z "$(awk -F '\t' -v n="$name" '$1 == n {print}' /tmp/packages-before.tsv)" || { echo "locked package already installed: $name" >&2; exit 1; }; \
+    done < package-manifest.tsv; \
+    cat /tmp/packages-before.tsv package-manifest.tsv | LC_ALL=C sort > /tmp/packages-expected.tsv; \
+    awk '{print "./" $2}' SHA256SUMS | xargs -r dpkg -i; \
+    test -z "$(dpkg --audit)"; \
+    dpkg-query -W -f='${Package}\t${Version}\t${Architecture}\n' | LC_ALL=C sort > /tmp/packages-after.tsv; \
+    diff -u /tmp/packages-expected.tsv /tmp/packages-after.tsv; \
+    test "$(pg_config --version)" = 'PostgreSQL 18.4 (Debian 18.4-1.pgdg11+1)'; \
+    test -f /usr/include/postgresql/18/server/postgres.h; \
+    test -f /usr/include/postgresql/libpq-fe.h; \
+    test "$(dpkg-query -W -f='${Version}' postgresql-server-dev-18)" = '18.4-1.pgdg11+1'; \
+    test "$(dpkg-query -W -f='${Version}' libpq-dev)" = '18.4-1.pgdg11+1'; \
+    command -v gcc; \
+    command -v make; \
+    command -v clang-16; \
+    command -v llvm-config-16; \
+    rm -rf /builder-debs /tmp/packages-before.tsv /tmp/packages-expected.tsv /tmp/packages-after.tsv

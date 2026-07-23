@@ -45,6 +45,25 @@ docker build --file .generated/firecrawl/apps/playwright-service-ts/Dockerfile \
   .generated/firecrawl/apps/playwright-service-ts
 ```
 
+## Hermetic PostgreSQL 18.4 development toolchain
+
+Task 2a locks the complete 71-package Debian/PGDG development closure in `sources/postgresql-18.4-dev.lock`. Debian timestamped snapshots pin the exact signed envelope and index bytes. PGDG archive envelopes and indexes are mutable, so its explicit schema-v2 policy verifies the current InRelease against the one allowed fingerprint, derives current index hashes and sizes from that signed release, and then requires canonical hashes of the complete selected package and PostgreSQL 18 source stanzas plus exact source-artifact hashes and sizes; unrelated records may change. Package blobs are fetched into one of two ignored, immutable generations under `.cache/builder-debs`; the singly-linked regular file `.cache/builder-debs/current` selects the verified generation atomically. The other bounded slot is retained for rollback and replaced on the next exclusive refresh. Each URL, byte size, and SHA-256 is checked before use. Offline verification and the build wrapper hold a shared lock, resolve the same physical generation, and pass that physical directory to BuildKit. The development image starts from the exact CNPG PostgreSQL 18.4 operand digest and installs packages with no network available to Dockerfile `RUN` steps.
+
+```bash
+scripts/fetch-builder-debs.sh
+scripts/fetch-builder-debs.sh --offline
+scripts/build-postgresql-dev.sh
+```
+
+The build wrapper uses a temporary Docker-container BuildKit worker pinned by OCI digest, passes the verified package cache as a named context, runs with `--network=none --pull=false`, and removes the temporary builder on exit. It uses no insecure BuildKit entitlement. Set `NO_CACHE=true` for the independent repeat build:
+
+```bash
+NO_CACHE=true scripts/build-postgresql-dev.sh \
+  local/firecrawl-postgresql-18.4-dev:verify-repeat
+```
+
+Compare the installed package manifests between builds. Image/config digests may differ because build metadata contains timestamps; do not claim digest reproducibility from package-manifest equality alone. The development image is an intermediate build tool and is not a deployable CNPG ImageVolume.
+
 ## Migration-image decision: gated
 
 No `Dockerfile.migration` or derived migration SQL is intentionally present. Raw upstream `apps/nuq-postgres/nuq.sql` is initdb/bootstrap SQL for upstream PostgreSQL 17, not a repeatable migration for shared CNPG PostgreSQL 18. It contains cluster-wide `ALTER SYSTEM` settings and unguarded `cron.schedule(...)` calls that duplicate jobs on reapply. A reviewed amendment must first define and test: accepted cluster-wide settings, privileged extension setup after `pg_cron` preload verification, and an idempotent separately named derived migration payload with an auditable diff/checksum. Until then, preserve and checksum the raw upstream SQL only; do not execute it as a shared-CNPG migration.

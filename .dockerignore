@@ -1,0 +1,28 @@
+# Only deliberately copied source files may enter ordinary production contexts.
+.git
+.gitignore
+.cache
+.docker
+.docker-buildx
+.buildx
+vendor
+.generated
+.test-upstream-pin
+roots
+layers
+tars
+*.tar
+*.tar.gz
+*.tar.zst
+*.deb
+*.oci
+*.log
+*.token
+*.tokens
+.env
+.env.*
+prototype
+prototypes
+
+# The PostgreSQL development image receives .cache/builder-debs only as an
+# explicit named BuildKit context, never through this default context.
