@@ -94,7 +94,7 @@ jobs:
 
       - name: Run Trivy vulnerability scan
         id: trivy
-        uses: aquasecurity/trivy-action@0.33.1
+        uses: aquasecurity/trivy-action@v0.33.1
         with:
           image-ref: ${{ steps.meta.outputs.local_image }}
           format: sarif
@@ -256,7 +256,7 @@ jobs:
 
       - name: Run Trivy vulnerability scan
         id: trivy
-        uses: aquasecurity/trivy-action@0.33.1
+        uses: aquasecurity/trivy-action@v0.33.1
         with:
           image-ref: ${{ steps.meta.outputs.local_image }}
           format: sarif

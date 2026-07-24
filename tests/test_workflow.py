@@ -96,6 +96,7 @@ class BuildWorkflowContractTests(unittest.TestCase):
             "docker/login-action": "docker/login-action@v3",
             "docker/build-push-action": "docker/build-push-action@v6",
             "actions/attest-build-provenance": "actions/attest-build-provenance@v2",
+            "aquasecurity/trivy-action": "aquasecurity/trivy-action@v0.33.1",
         }
         for job_name in ("api", "playwright"):
             job = self.jobs[job_name]
