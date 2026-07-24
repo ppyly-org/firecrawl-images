@@ -83,7 +83,7 @@ jobs:
         id: build
         uses: docker/build-push-action@v6
         with:
-          context: .generated/firecrawl
+          context: .generated/firecrawl/apps/api
           file: .generated/firecrawl/apps/api/Dockerfile
           load: true
           push: false
@@ -94,7 +94,7 @@ jobs:
 
       - name: Run Trivy vulnerability scan
         id: trivy
-        uses: aquasecurity/trivy-action@v0.33.1
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ steps.meta.outputs.local_image }}
           format: sarif
@@ -256,7 +256,7 @@ jobs:
 
       - name: Run Trivy vulnerability scan
         id: trivy
-        uses: aquasecurity/trivy-action@v0.33.1
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ steps.meta.outputs.local_image }}
           format: sarif

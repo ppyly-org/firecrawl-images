@@ -96,7 +96,7 @@ class BuildWorkflowContractTests(unittest.TestCase):
             "docker/login-action": "docker/login-action@v3",
             "docker/build-push-action": "docker/build-push-action@v6",
             "actions/attest-build-provenance": "actions/attest-build-provenance@v2",
-            "aquasecurity/trivy-action": "aquasecurity/trivy-action@v0.33.1",
+            "aquasecurity/trivy-action": "aquasecurity/trivy-action@v0.36.0",
         }
         for job_name in ("api", "playwright"):
             job = self.jobs[job_name]
@@ -117,7 +117,10 @@ class BuildWorkflowContractTests(unittest.TestCase):
 
     def test_api_and_playwright_use_only_exact_commit_archives(self):
         expected = {
-            "api": (".generated/firecrawl", ".generated/firecrawl/apps/api/Dockerfile"),
+            "api": (
+                ".generated/firecrawl/apps/api",
+                ".generated/firecrawl/apps/api/Dockerfile",
+            ),
             "playwright": (
                 ".generated/firecrawl/apps/playwright-service-ts",
                 ".generated/firecrawl/apps/playwright-service-ts/Dockerfile",
