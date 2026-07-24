@@ -1,15 +1,13 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": [
-    "config:recommended"
+  "enabledManagers": [
+    "custom.regex"
+  ],
+  "includePaths": [
+    "UPSTREAM_VERSION"
   ],
   "automerge": false,
   "dependencyDashboard": true,
-  "ignorePaths": [
-    "deployment/**",
-    "deploy/**",
-    "manifests/**"
-  ],
   "customManagers": [
     {
       "customType": "regex",
@@ -27,10 +25,17 @@
   ],
   "packageRules": [
     {
+      "matchManagers": [
+        "custom.regex"
+      ],
+      "matchFileNames": [
+        "UPSTREAM_VERSION"
+      ],
       "matchDepNames": [
         "firecrawl/firecrawl"
       ],
       "enabled": true,
+      "automerge": false,
       "rangeStrategy": "replace",
       "commitMessageTopic": "Firecrawl upstream",
       "prCreation": "immediate"

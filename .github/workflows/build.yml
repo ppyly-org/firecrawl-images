@@ -62,6 +62,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Materialize pristine exact-commit API context
+        id: materialize
         run: |
           set -euo pipefail
           scripts/fetch-upstream.sh
@@ -75,7 +76,11 @@ jobs:
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Set up crane
+        uses: imjasonh/setup-crane@v0.4
+
       - name: Build API locally without pushing
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .generated/firecrawl
@@ -84,10 +89,11 @@ jobs:
           push: false
           tags: |
             ${{ steps.meta.outputs.local_image }}
-            ghcr.io/ppyly-org/firecrawl-api:${{ steps.meta.outputs.version }}
-            ghcr.io/ppyly-org/firecrawl-api:sha-${{ github.sha }}
+            ${{ env.API_REPOSITORY }}:${{ steps.meta.outputs.version }}
+            ${{ env.API_REPOSITORY }}:sha-${{ github.sha }}
 
       - name: Run Trivy vulnerability scan
+        id: trivy
         uses: aquasecurity/trivy-action@0.33.1
         with:
           image-ref: ${{ steps.meta.outputs.local_image }}
@@ -98,6 +104,7 @@ jobs:
           ignore-unfixed: true
 
       - name: Generate API SBOM
+        id: sbom
         uses: anchore/sbom-action@v0.20.6
         with:
           image: ${{ steps.meta.outputs.local_image }}
@@ -105,55 +112,75 @@ jobs:
           output-file: api.spdx.json
           upload-artifact: false
 
-      - name: Generate pre-push provenance predicate
+      - name: Materialize exact local publishable OCI subject
+        id: subject
         run: |
           set -euo pipefail
-          image_id="$(docker image inspect --format '{{.Id}}' '${{ steps.meta.outputs.local_image }}')"
-          jq -n \
-            --arg source "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}@${GITHUB_SHA}" \
-            --arg upstream "${{ steps.meta.outputs.commit }}" \
-            --arg image_id "$image_id" \
-            '{buildType:"https://github.com/ppyly-org/firecrawl-images/build/v1", invocation:{source:$source,upstreamCommit:$upstream}, subject:[{name:"firecrawl-api-local",digest:{dockerImageId:$image_id}}]}' \
-            > api-provenance.json
+          docker save '${{ steps.meta.outputs.local_image }}' --output api-image.tar
+          digest="$(crane digest --tarball api-image.tar)"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          {
+            echo "archive=api-image.tar"
+            echo "digest=$digest"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create signed pre-push API build provenance attestation
+        id: prepush_attestation
+        if: ${{ github.ref_protected == true }}
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.API_REPOSITORY }}
+          subject-digest: ${{ steps.subject.outputs.digest }}
+          push-to-registry: false
+
+      - name: Cryptographically verify pre-push API build provenance
+        id: verify_prepush_attestation
+        if: ${{ github.ref_protected == true }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh attestation verify 'oci://${{ env.API_REPOSITORY }}@${{ steps.subject.outputs.digest }}' --repo "$GITHUB_REPOSITORY" --bundle '${{ steps.prepush_attestation.outputs.bundle-path }}'
 
       - name: Smoke test API image
+        id: smoke
         run: scripts/smoke-images.sh api '${{ steps.meta.outputs.local_image }}'
 
-      - name: Upload pre-push security evidence
+      - name: Upload pre-push API security evidence
         uses: actions/upload-artifact@v4
         with:
           name: firecrawl-api-security-evidence-${{ github.sha }}
           path: |
             api-trivy.sarif
             api.spdx.json
-            api-provenance.json
+            ${{ steps.prepush_attestation.outputs.bundle-path }}
           if-no-files-found: error
 
       - name: Log in to private GHCR
-        if: ${{ github.ref_protected == true || github.ref_type == 'tag' }}
+        id: login
+        if: ${{ github.ref_protected == true }}
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Push immutable tested API tags to private GHCR
+      - name: Publish verified API archive only to private GHCR
         id: push
-        if: ${{ github.ref_protected == true || github.ref_type == 'tag' }}
-        run: |
-          set -euo pipefail
-          readonly API_REPOSITORY="ghcr.io/ppyly-org/firecrawl-api"
-          version="${{ steps.meta.outputs.version }}"
-          docker push "${API_REPOSITORY}:${version}"
-          docker push "${API_REPOSITORY}:sha-${GITHUB_SHA}"
-          reference="$(docker image inspect --format '{{index .RepoDigests 0}}' "${API_REPOSITORY}:sha-${GITHUB_SHA}")"
-          digest="${reference#*@}"
-          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          echo "digest=$digest" >> "$GITHUB_OUTPUT"
-          echo "Published immutable reference ${API_REPOSITORY}@${digest}"
+        if: ${{ github.ref_protected == true }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          scripts/publish-private-ghcr.sh
+          '${{ steps.subject.outputs.archive }}'
+          '${{ env.API_REPOSITORY }}'
+          '${{ steps.meta.outputs.version }}'
+          "sha-${GITHUB_SHA}"
+          '${{ steps.subject.outputs.digest }}'
 
       - name: Attest published API digest
-        if: ${{ steps.push.outputs.digest != '' }}
+        id: postpush_attestation
+        if: ${{ github.ref_protected == true && steps.push.outputs.digest != '' }}
         uses: actions/attest-build-provenance@v2
         with:
           subject-name: ${{ env.API_REPOSITORY }}
@@ -196,6 +223,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Materialize pristine exact-commit Playwright context
+        id: materialize
         run: |
           set -euo pipefail
           scripts/fetch-upstream.sh
@@ -209,7 +237,11 @@ jobs:
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Set up crane
+        uses: imjasonh/setup-crane@v0.4
+
       - name: Build Playwright locally without pushing
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .generated/firecrawl/apps/playwright-service-ts
@@ -219,10 +251,11 @@ jobs:
           push: false
           tags: |
             ${{ steps.meta.outputs.local_image }}
-            ghcr.io/ppyly-org/firecrawl-playwright:${{ steps.meta.outputs.version }}
-            ghcr.io/ppyly-org/firecrawl-playwright:sha-${{ github.sha }}
+            ${{ env.PLAYWRIGHT_REPOSITORY }}:${{ steps.meta.outputs.version }}
+            ${{ env.PLAYWRIGHT_REPOSITORY }}:sha-${{ github.sha }}
 
       - name: Run Trivy vulnerability scan
+        id: trivy
         uses: aquasecurity/trivy-action@0.33.1
         with:
           image-ref: ${{ steps.meta.outputs.local_image }}
@@ -233,6 +266,7 @@ jobs:
           ignore-unfixed: true
 
       - name: Generate Playwright SBOM
+        id: sbom
         uses: anchore/sbom-action@v0.20.6
         with:
           image: ${{ steps.meta.outputs.local_image }}
@@ -240,55 +274,75 @@ jobs:
           output-file: playwright.spdx.json
           upload-artifact: false
 
-      - name: Generate pre-push provenance predicate
+      - name: Materialize exact local publishable OCI subject
+        id: subject
         run: |
           set -euo pipefail
-          image_id="$(docker image inspect --format '{{.Id}}' '${{ steps.meta.outputs.local_image }}')"
-          jq -n \
-            --arg source "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}@${GITHUB_SHA}" \
-            --arg upstream "${{ steps.meta.outputs.commit }}" \
-            --arg image_id "$image_id" \
-            '{buildType:"https://github.com/ppyly-org/firecrawl-images/build/v1", invocation:{source:$source,upstreamCommit:$upstream}, subject:[{name:"firecrawl-playwright-local",digest:{dockerImageId:$image_id}}]}' \
-            > playwright-provenance.json
+          docker save '${{ steps.meta.outputs.local_image }}' --output playwright-image.tar
+          digest="$(crane digest --tarball playwright-image.tar)"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          {
+            echo "archive=playwright-image.tar"
+            echo "digest=$digest"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create signed pre-push Playwright build provenance attestation
+        id: prepush_attestation
+        if: ${{ github.ref_protected == true }}
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.PLAYWRIGHT_REPOSITORY }}
+          subject-digest: ${{ steps.subject.outputs.digest }}
+          push-to-registry: false
+
+      - name: Cryptographically verify pre-push Playwright build provenance
+        id: verify_prepush_attestation
+        if: ${{ github.ref_protected == true }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh attestation verify 'oci://${{ env.PLAYWRIGHT_REPOSITORY }}@${{ steps.subject.outputs.digest }}' --repo "$GITHUB_REPOSITORY" --bundle '${{ steps.prepush_attestation.outputs.bundle-path }}'
 
       - name: Smoke test Playwright image
+        id: smoke
         run: scripts/smoke-images.sh playwright '${{ steps.meta.outputs.local_image }}'
 
-      - name: Upload pre-push security evidence
+      - name: Upload pre-push Playwright security evidence
         uses: actions/upload-artifact@v4
         with:
           name: firecrawl-playwright-security-evidence-${{ github.sha }}
           path: |
             playwright-trivy.sarif
             playwright.spdx.json
-            playwright-provenance.json
+            ${{ steps.prepush_attestation.outputs.bundle-path }}
           if-no-files-found: error
 
       - name: Log in to private GHCR
-        if: ${{ github.ref_protected == true || github.ref_type == 'tag' }}
+        id: login
+        if: ${{ github.ref_protected == true }}
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Push immutable tested Playwright tags to private GHCR
+      - name: Publish verified Playwright archive only to private GHCR
         id: push
-        if: ${{ github.ref_protected == true || github.ref_type == 'tag' }}
-        run: |
-          set -euo pipefail
-          readonly PLAYWRIGHT_REPOSITORY="ghcr.io/ppyly-org/firecrawl-playwright"
-          version="${{ steps.meta.outputs.version }}"
-          docker push "${PLAYWRIGHT_REPOSITORY}:${version}"
-          docker push "${PLAYWRIGHT_REPOSITORY}:sha-${GITHUB_SHA}"
-          reference="$(docker image inspect --format '{{index .RepoDigests 0}}' "${PLAYWRIGHT_REPOSITORY}:sha-${GITHUB_SHA}")"
-          digest="${reference#*@}"
-          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          echo "digest=$digest" >> "$GITHUB_OUTPUT"
-          echo "Published immutable reference ${PLAYWRIGHT_REPOSITORY}@${digest}"
+        if: ${{ github.ref_protected == true }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          scripts/publish-private-ghcr.sh
+          '${{ steps.subject.outputs.archive }}'
+          '${{ env.PLAYWRIGHT_REPOSITORY }}'
+          '${{ steps.meta.outputs.version }}'
+          "sha-${GITHUB_SHA}"
+          '${{ steps.subject.outputs.digest }}'
 
       - name: Attest published Playwright digest
-        if: ${{ steps.push.outputs.digest != '' }}
+        id: postpush_attestation
+        if: ${{ github.ref_protected == true && steps.push.outputs.digest != '' }}
         uses: actions/attest-build-provenance@v2
         with:
           subject-name: ${{ env.PLAYWRIGHT_REPOSITORY }}
