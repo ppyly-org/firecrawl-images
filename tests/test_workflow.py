@@ -167,6 +167,8 @@ class BuildWorkflowContractTests(unittest.TestCase):
         required_order = [
             "build",
             "trivy",
+            "trivy_report",
+            "trivy_gate",
             "sbom",
             "subject",
             "prepush_attestation",
@@ -182,6 +184,36 @@ class BuildWorkflowContractTests(unittest.TestCase):
             self.assertEqual(indices, sorted(indices), f"{job_name}: unsafe step order")
             for step_id in ("prepush_attestation", "verify_prepush_attestation", "login", "push", "postpush_attestation"):
                 assert_protected_only(self, step_by_id(job, step_id))
+
+    def test_trivy_sarif_is_preserved_before_fail_closed_enforcement(self):
+        for job_name in ("api", "playwright"):
+            job = self.jobs[job_name]
+            trivy = step_by_id(job, "trivy")
+            self.assertEqual(trivy["with"]["exit-code"], "0")
+            self.assertEqual(trivy["with"]["scanners"], "vuln")
+            self.assertEqual(trivy["with"]["severity"], "CRITICAL,HIGH")
+            self.assertTrue(trivy["with"]["limit-severities-for-sarif"])
+
+            report = step_by_id(job, "trivy_report")
+            self.assertEqual(report["uses"], "actions/upload-artifact@v4")
+            self.assertEqual(report["if"], "${{ always() }}")
+            self.assertEqual(
+                report["with"]["path"],
+                f"{job_name}-trivy.sarif",
+            )
+            self.assertEqual(report["with"]["if-no-files-found"], "error")
+
+            gate = step_by_id(job, "trivy_gate")
+            gate_run = gate["run"]
+            for required in (
+                "trivy image",
+                "--scanners vuln",
+                "--ignore-unfixed",
+                "--severity CRITICAL,HIGH",
+                "--exit-code 1",
+                "${{ steps.meta.outputs.local_image }}",
+            ):
+                self.assertIn(required, gate_run)
 
     def test_every_existing_registry_publication_path_is_protected_only(self):
         for job_name in ("api", "playwright"):
