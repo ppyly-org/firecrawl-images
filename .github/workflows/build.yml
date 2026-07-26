@@ -193,7 +193,7 @@ jobs:
             ${{ steps.prepush_attestation.outputs.bundle-path }}
           if-no-files-found: error
 
-      - name: Log in to private GHCR
+      - name: Log in to GHCR
         id: login
         if: ${{ github.ref_protected == true }}
         uses: docker/login-action@v3
@@ -202,13 +202,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Publish verified API archive only to private GHCR
+      - name: Publish verified API archive to GHCR
         id: push
         if: ${{ github.ref_protected == true }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: >-
-          scripts/publish-private-ghcr.sh
+          scripts/publish-ghcr.sh
           '${{ steps.subject.outputs.archive }}'
           '${{ env.API_REPOSITORY }}'
           '${{ steps.meta.outputs.version }}'
@@ -392,7 +392,7 @@ jobs:
             ${{ steps.prepush_attestation.outputs.bundle-path }}
           if-no-files-found: error
 
-      - name: Log in to private GHCR
+      - name: Log in to GHCR
         id: login
         if: ${{ github.ref_protected == true }}
         uses: docker/login-action@v3
@@ -401,13 +401,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Publish verified Playwright archive only to private GHCR
+      - name: Publish verified Playwright archive to GHCR
         id: push
         if: ${{ github.ref_protected == true }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: >-
-          scripts/publish-private-ghcr.sh
+          scripts/publish-ghcr.sh
           '${{ steps.subject.outputs.archive }}'
           '${{ env.PLAYWRIGHT_REPOSITORY }}'
           '${{ steps.meta.outputs.version }}'

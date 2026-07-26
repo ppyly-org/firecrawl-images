@@ -1,6 +1,6 @@
 # Firecrawl image sources
 
-This repository pins the source used to build private Firecrawl images. The pin is deliberately split into `UPSTREAM_VERSION` (`v2.11.0`) and `UPSTREAM_COMMIT` (`ef12eb36b2f3382838dfe0a0c1a5add3d5df7fe5`). `vendor/firecrawl` is a detached, ignored checkout used only to fetch and verify the pinned object; it is never a Docker build context or committed source.
+This repository pins the source used to build verified Firecrawl images (published publicly on GHCR — upstream is AGPL-3.0 and this builder repo is the corresponding source for the hardening layer). The pin is deliberately split into `UPSTREAM_VERSION` (`v2.11.0`) and `UPSTREAM_COMMIT` (`ef12eb36b2f3382838dfe0a0c1a5add3d5df7fe5`). `vendor/firecrawl` is a detached, ignored checkout used only to fetch and verify the pinned object; it is never a Docker build context or committed source.
 
 ## Provenance verification
 

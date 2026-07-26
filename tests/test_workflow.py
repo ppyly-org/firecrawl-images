@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 BUILD_WORKFLOW = ROOT / ".github" / "workflows" / "build.yml"
 RENOVATE_WORKFLOW = ROOT / ".github" / "workflows" / "renovate.yml"
 RENOVATE_CONFIG = ROOT / "renovate.json"
-PRIVATE_PUBLISHER = ROOT / "scripts" / "publish-private-ghcr.sh"
+PUBLISHER = ROOT / "scripts" / "publish-ghcr.sh"
 
 
 class GitHubLoader(yaml.SafeLoader):
@@ -299,7 +299,7 @@ class BuildWorkflowContractTests(unittest.TestCase):
         for job_name in ("api", "playwright"):
             push = step_by_id(self.jobs[job_name], "push")
             self.assertEqual(shlex.split(push["run"]), [
-                "scripts/publish-private-ghcr.sh",
+                "scripts/publish-ghcr.sh",
                 "${{ steps.subject.outputs.archive }}",
                 "${{ env.API_REPOSITORY }}" if job_name == "api" else "${{ env.PLAYWRIGHT_REPOSITORY }}",
                 "${{ steps.meta.outputs.version }}",
@@ -331,14 +331,18 @@ class BuildWorkflowContractTests(unittest.TestCase):
             self.assertNotRegex(str(step.get("with", "")), command_pattern)
 
 
-class PrivateGhcrPublisherContractTests(unittest.TestCase):
+# Images are deliberately public (AGPL source-availability + free branch
+# protection); the fail-closed check now enforces DECLARED visibility —
+# a package left private-by-default after first creation fails the run
+# until the one-time UI flip to public.
+class GhcrPublisherContractTests(unittest.TestCase):
     def test_visibility_gate_commands_fail_closed_and_never_echo_token(self):
-        self.assertTrue(PRIVATE_PUBLISHER.is_file(), "private GHCR publisher script is missing")
-        script = PRIVATE_PUBLISHER.read_text(encoding="utf-8")
+        self.assertTrue(PUBLISHER.is_file(), "GHCR publisher script is missing")
+        script = PUBLISHER.read_text(encoding="utf-8")
         self.assertIn("api.github.com/orgs/ppyly-org/packages/container/", script)
         self.assertIn("Authorization: Bearer ${GITHUB_TOKEN}", script)
         self.assertIn("X-GitHub-Api-Version: 2022-11-28", script)
-        self.assertRegex(script, r"jq\s+-e\s+['\"]\.visibility == ['\"]private['\"]")
+        self.assertRegex(script, r"jq\s+-e\s+['\"]\.visibility == ['\"]public['\"]")
         self.assertRegex(script, r"case\s+.*status.*\s+in")
         self.assertRegex(script, r"200\)")
         self.assertRegex(script, r"404\)")
@@ -348,17 +352,17 @@ class PrivateGhcrPublisherContractTests(unittest.TestCase):
         self.assertNotRegex(script, r"set\s+-[^\n]*x")
         self.assertNotRegex(script, r"echo[^\n]*(?:GITHUB_TOKEN|github_token)")
 
-    def test_visibility_behavior_rejects_public_and_non_404_errors_before_push(self):
-        for response in ("200:public", "403:private", "500:private"):
+    def test_visibility_behavior_rejects_private_and_non_404_errors_before_push(self):
+        for response in ("200:private", "403:public", "500:public"):
             with self.subTest(response=response):
                 result, crane_log = self._run_publisher([response])
                 self.assertNotEqual(result.returncode, 0)
                 self.assertNotIn("push", crane_log)
                 self.assertNotIn("test-secret-value", result.stdout + result.stderr)
 
-    def test_authenticated_404_allows_first_push_then_requires_private(self):
+    def test_authenticated_404_allows_first_push_then_requires_public(self):
         result, crane_log = self._run_publisher(
-            ["404:missing", "200:private", "200:private", "200:private"]
+            ["404:missing", "200:public", "200:public", "200:public"]
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         lines = crane_log.splitlines()
@@ -367,14 +371,16 @@ class PrivateGhcrPublisherContractTests(unittest.TestCase):
         self.assertEqual(lines[1].split()[0], "tag")
         self.assertNotIn("test-secret-value", result.stdout + result.stderr)
 
-    def test_after_push_public_visibility_fails_before_version_tag(self):
-        result, crane_log = self._run_publisher(["404:missing", "200:public"])
+    def test_after_push_private_visibility_fails_before_version_tag(self):
+        # First creation is always private-by-default; the run must fail
+        # (before the version tag) until the one-time UI flip to public.
+        result, crane_log = self._run_publisher(["404:missing", "200:private"])
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual([line.split()[0] for line in crane_log.splitlines()], ["push"])
 
     def _run_publisher(self, responses):
-        if not PRIVATE_PUBLISHER.is_file():
-            raise AssertionError("private GHCR publisher script is missing")
+        if not PUBLISHER.is_file():
+            raise AssertionError("GHCR publisher script is missing")
         with tempfile.TemporaryDirectory() as directory:
             temp = Path(directory)
             fake_bin = temp / "bin"
@@ -425,7 +431,7 @@ esac
             }
             result = subprocess.run(
                 [
-                    str(PRIVATE_PUBLISHER),
+                    str(PUBLISHER),
                     str(archive),
                     "ghcr.io/ppyly-org/firecrawl-api",
                     "v1.2.3",

@@ -40,13 +40,20 @@ query_visibility() {
     "$metadata_url")"
 }
 
-require_private_visibility() {
+# Images are deliberately public: the source is AGPL upstream plus this
+# public builder repo, and nothing secret is baked in. A package that is
+# not public is treated as config drift and fails the run — GitHub creates
+# packages private-by-default and offers no API to change that, so the
+# first-ever publish requires a one-time UI flip (Package settings ->
+# Change visibility -> Public), then a rerun.
+require_public_visibility() {
   local allow_authenticated_404="$1"
   query_visibility
   case "$metadata_status" in
     200)
-      if ! jq -e '.visibility == "private"' "$response_file" >/dev/null; then
-        printf 'Refusing publication: existing GHCR package is not private.\n' >&2
+      if ! jq -e '.visibility == "public"' "$response_file" >/dev/null; then
+        printf 'Refusing publication: GHCR package is not public. One-time fix:\n' >&2
+        printf 'Package settings -> Change visibility -> Public, then rerun.\n' >&2
         return 1
       fi
       ;;
@@ -55,7 +62,7 @@ require_private_visibility() {
         printf 'Refusing publication: GHCR package metadata is missing after first creation.\n' >&2
         return 1
       fi
-      printf 'Authenticated package lookup returned 404; allowing private-by-default first creation.\n'
+      printf 'Authenticated package lookup returned 404; allowing first creation (private-by-default).\n'
       ;;
     *)
       printf 'Refusing publication: GHCR package metadata returned HTTP %s.\n' "$metadata_status" >&2
@@ -64,16 +71,18 @@ require_private_visibility() {
   esac
 }
 
-wait_until_private() {
+wait_until_public() {
   local attempt
   for ((attempt = 1; attempt <= retries; attempt++)); do
     query_visibility
     case "$metadata_status" in
       200)
-        if jq -e '.visibility == "private"' "$response_file" >/dev/null; then
+        if jq -e '.visibility == "public"' "$response_file" >/dev/null; then
           return 0
         fi
-        printf 'Publication failed: created GHCR package is not private.\n' >&2
+        printf 'Publication failed: GHCR package is not public (first creation is\n' >&2
+        printf 'always private). One-time fix: Package settings -> Change visibility\n' >&2
+        printf '-> Public, then rerun. The digest is pushed; only tagging is blocked.\n' >&2
         return 1
         ;;
       404)
@@ -88,12 +97,12 @@ wait_until_private() {
         ;;
     esac
   done
-  printf 'Publication failed: private GHCR metadata never became accessible.\n' >&2
+  printf 'Publication failed: GHCR package metadata never became accessible.\n' >&2
   return 1
 }
 
 # A 404 is accepted only here, before the one operation that may create a package.
-require_private_visibility true
+require_public_visibility true
 pushed_reference="$(crane push "$archive" "${repository}:${sha_tag}")"
 [[ "$pushed_reference" == "${repository}@sha256:"* ]]
 pushed_digest="${pushed_reference#*@}"
@@ -103,14 +112,14 @@ if [[ "$pushed_digest" != "$subject_digest" ]]; then
   exit 1
 fi
 
-# Creation must resolve to private before adding any second tag.
-wait_until_private
-require_private_visibility false
+# Creation must resolve to public before adding any second tag.
+wait_until_public
+require_public_visibility false
 crane tag "${repository}@${subject_digest}" "$version_tag"
 
-# Publication is successful only after an authenticated private-visibility check.
-require_private_visibility false
+# Publication is successful only after an authenticated public-visibility check.
+require_public_visibility false
 if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
   printf 'digest=%s\n' "$subject_digest" >> "$GITHUB_OUTPUT"
 fi
-printf 'Published verified private image %s@%s\n' "$repository" "$subject_digest"
+printf 'Published verified public image %s@%s\n' "$repository" "$subject_digest"
