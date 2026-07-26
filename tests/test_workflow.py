@@ -134,7 +134,7 @@ class BuildWorkflowContractTests(unittest.TestCase):
             self.assertIn("cat-file -e", run)
             self.assertIn("test ! -e .generated/firecrawl/.git", run)
             builds = action_steps(job, "docker/build-push-action")
-            self.assertEqual(len(builds), 2)
+            self.assertEqual(len(builds), 1)
             upstream_build = step_by_id(job, "build")
             self.assertEqual(upstream_build["with"]["context"], context)
             self.assertEqual(upstream_build["with"]["file"], dockerfile)
@@ -149,17 +149,21 @@ class BuildWorkflowContractTests(unittest.TestCase):
             self.assertNotIn("local_image", upstream_tags)
             self.assertNotIn("REPOSITORY", upstream_tags)
 
+            # Plain docker build on the daemon: a buildx container-driver
+            # builder cannot resolve FROM against daemon-loaded local images.
             harden = step_by_id(job, "harden")
-            self.assertEqual(harden["uses"], "docker/build-push-action@v6")
-            self.assertEqual(harden["with"]["file"], "Dockerfile.hardening")
+            harden_run = harden["run"]
+            self.assertNotIn("uses", harden)
+            self.assertIn("docker build", harden_run)
+            self.assertIn("--file Dockerfile.hardening", harden_run)
             self.assertIn(
-                "BASE_IMAGE=${{ steps.meta.outputs.upstream_image }}",
-                harden["with"]["build-args"],
+                "--build-arg 'BASE_IMAGE=${{ steps.meta.outputs.upstream_image }}'",
+                harden_run,
             )
-            self.assertRegex(harden["with"]["build-args"], r"NPM_MAJOR=\^\d+")
-            self.assertIn("${{ steps.meta.outputs.local_image }}", harden["with"]["tags"])
-            self.assertNotIn("vendor/firecrawl", str(harden["with"]))
-            self.assertNotIn(".generated", str(harden["with"]))
+            self.assertRegex(harden_run, r"--build-arg 'NPM_MAJOR=\^\d+'")
+            self.assertIn("--tag '${{ steps.meta.outputs.local_image }}'", harden_run)
+            self.assertNotIn("vendor/firecrawl", harden_run)
+            self.assertNotIn(".generated", harden_run)
 
     def test_accepted_risk_files_are_scoped_justified_and_expiring(self):
         for job_name in ("api", "playwright"):

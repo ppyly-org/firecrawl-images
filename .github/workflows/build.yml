@@ -93,22 +93,19 @@ jobs:
 
       # Fixes what upstream does not pin on purpose (stale base-image OS
       # packages, bundled npm CLI); the scanned/attested/published image is
-      # exclusively this hardened derivative.
+      # exclusively this hardened derivative. Plain docker build: the buildx
+      # container builder cannot FROM a daemon-loaded local image.
       - name: Apply API security hardening layer
         id: harden
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: Dockerfile.hardening
-          load: true
-          push: false
-          build-args: |
-            BASE_IMAGE=${{ steps.meta.outputs.upstream_image }}
-            NPM_MAJOR=^11
-          tags: |
-            ${{ steps.meta.outputs.local_image }}
-            ${{ env.API_REPOSITORY }}:${{ steps.meta.outputs.version }}
-            ${{ env.API_REPOSITORY }}:sha-${{ github.sha }}
+        run: >-
+          docker build
+          --file Dockerfile.hardening
+          --build-arg 'BASE_IMAGE=${{ steps.meta.outputs.upstream_image }}'
+          --build-arg 'NPM_MAJOR=^11'
+          --tag '${{ steps.meta.outputs.local_image }}'
+          --tag '${{ env.API_REPOSITORY }}:${{ steps.meta.outputs.version }}'
+          --tag "${API_REPOSITORY}:sha-${GITHUB_SHA}"
+          .
 
       - name: Run Trivy vulnerability scan
         id: trivy
@@ -295,22 +292,19 @@ jobs:
             ${{ steps.meta.outputs.upstream_image }}
 
       # node:18 cannot run npm 11 — NPM_MAJOR stays at the newest major that
-      # still supports the upstream base's Node runtime.
+      # still supports the upstream base's Node runtime. Plain docker build:
+      # the buildx container builder cannot FROM a daemon-loaded local image.
       - name: Apply Playwright security hardening layer
         id: harden
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: Dockerfile.hardening
-          load: true
-          push: false
-          build-args: |
-            BASE_IMAGE=${{ steps.meta.outputs.upstream_image }}
-            NPM_MAJOR=^10
-          tags: |
-            ${{ steps.meta.outputs.local_image }}
-            ${{ env.PLAYWRIGHT_REPOSITORY }}:${{ steps.meta.outputs.version }}
-            ${{ env.PLAYWRIGHT_REPOSITORY }}:sha-${{ github.sha }}
+        run: >-
+          docker build
+          --file Dockerfile.hardening
+          --build-arg 'BASE_IMAGE=${{ steps.meta.outputs.upstream_image }}'
+          --build-arg 'NPM_MAJOR=^10'
+          --tag '${{ steps.meta.outputs.local_image }}'
+          --tag '${{ env.PLAYWRIGHT_REPOSITORY }}:${{ steps.meta.outputs.version }}'
+          --tag "${PLAYWRIGHT_REPOSITORY}:sha-${GITHUB_SHA}"
+          .
 
       - name: Run Trivy vulnerability scan
         id: trivy
