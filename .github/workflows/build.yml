@@ -58,6 +58,7 @@ jobs:
           {
             echo "version=$version"
             echo "commit=$commit"
+            echo "upstream_image=local/firecrawl-api-upstream:${GITHUB_SHA}"
             echo "local_image=local/firecrawl-api:${GITHUB_SHA}"
           } >> "$GITHUB_OUTPUT"
 
@@ -87,6 +88,23 @@ jobs:
           file: .generated/firecrawl/apps/api/Dockerfile
           load: true
           push: false
+          tags: |
+            ${{ steps.meta.outputs.upstream_image }}
+
+      # Fixes what upstream does not pin on purpose (stale base-image OS
+      # packages, bundled npm CLI); the scanned/attested/published image is
+      # exclusively this hardened derivative.
+      - name: Apply API security hardening layer
+        id: harden
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.hardening
+          load: true
+          push: false
+          build-args: |
+            BASE_IMAGE=${{ steps.meta.outputs.upstream_image }}
+            NPM_MAJOR=^11
           tags: |
             ${{ steps.meta.outputs.local_image }}
             ${{ env.API_REPOSITORY }}:${{ steps.meta.outputs.version }}
@@ -123,6 +141,7 @@ jobs:
           --ignore-unfixed
           --severity CRITICAL,HIGH
           --exit-code 1
+          --ignorefile security/accepted-risks-api.trivyignore.yaml
           '${{ steps.meta.outputs.local_image }}'
 
       - name: Generate API SBOM
@@ -241,6 +260,7 @@ jobs:
           {
             echo "version=$version"
             echo "commit=$commit"
+            echo "upstream_image=local/firecrawl-playwright-upstream:${GITHUB_SHA}"
             echo "local_image=local/firecrawl-playwright:${GITHUB_SHA}"
           } >> "$GITHUB_OUTPUT"
 
@@ -271,6 +291,22 @@ jobs:
           build-args: PORT=3000
           load: true
           push: false
+          tags: |
+            ${{ steps.meta.outputs.upstream_image }}
+
+      # node:18 cannot run npm 11 — NPM_MAJOR stays at the newest major that
+      # still supports the upstream base's Node runtime.
+      - name: Apply Playwright security hardening layer
+        id: harden
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.hardening
+          load: true
+          push: false
+          build-args: |
+            BASE_IMAGE=${{ steps.meta.outputs.upstream_image }}
+            NPM_MAJOR=^10
           tags: |
             ${{ steps.meta.outputs.local_image }}
             ${{ env.PLAYWRIGHT_REPOSITORY }}:${{ steps.meta.outputs.version }}
@@ -307,6 +343,7 @@ jobs:
           --ignore-unfixed
           --severity CRITICAL,HIGH
           --exit-code 1
+          --ignorefile security/accepted-risks-playwright.trivyignore.yaml
           '${{ steps.meta.outputs.local_image }}'
 
       - name: Generate Playwright SBOM

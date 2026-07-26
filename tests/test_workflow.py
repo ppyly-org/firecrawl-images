@@ -134,10 +134,51 @@ class BuildWorkflowContractTests(unittest.TestCase):
             self.assertIn("cat-file -e", run)
             self.assertIn("test ! -e .generated/firecrawl/.git", run)
             builds = action_steps(job, "docker/build-push-action")
-            self.assertEqual(len(builds), 1)
-            self.assertEqual(builds[0]["with"]["context"], context)
-            self.assertEqual(builds[0]["with"]["file"], dockerfile)
-            self.assertNotIn("vendor/firecrawl", str(builds[0]["with"]))
+            self.assertEqual(len(builds), 2)
+            upstream_build = step_by_id(job, "build")
+            self.assertEqual(upstream_build["with"]["context"], context)
+            self.assertEqual(upstream_build["with"]["file"], dockerfile)
+            self.assertNotIn("vendor/firecrawl", str(upstream_build["with"]))
+
+    def test_hardening_layer_is_the_only_publishable_image(self):
+        for job_name in ("api", "playwright"):
+            job = self.jobs[job_name]
+            upstream_build = step_by_id(job, "build")
+            upstream_tags = upstream_build["with"]["tags"]
+            self.assertIn("upstream_image", upstream_tags)
+            self.assertNotIn("local_image", upstream_tags)
+            self.assertNotIn("REPOSITORY", upstream_tags)
+
+            harden = step_by_id(job, "harden")
+            self.assertEqual(harden["uses"], "docker/build-push-action@v6")
+            self.assertEqual(harden["with"]["file"], "Dockerfile.hardening")
+            self.assertIn(
+                "BASE_IMAGE=${{ steps.meta.outputs.upstream_image }}",
+                harden["with"]["build-args"],
+            )
+            self.assertRegex(harden["with"]["build-args"], r"NPM_MAJOR=\^\d+")
+            self.assertIn("${{ steps.meta.outputs.local_image }}", harden["with"]["tags"])
+            self.assertNotIn("vendor/firecrawl", str(harden["with"]))
+            self.assertNotIn(".generated", str(harden["with"]))
+
+    def test_accepted_risk_files_are_scoped_justified_and_expiring(self):
+        for job_name in ("api", "playwright"):
+            path = ROOT / "security" / f"accepted-risks-{job_name}.trivyignore.yaml"
+            self.assertTrue(path.is_file(), f"missing {path}")
+            data = load_yaml(path)
+            self.assertEqual(set(data), {"vulnerabilities"})
+            for entry in data["vulnerabilities"] or []:
+                self.assertRegex(entry["id"], r"^CVE-\d{4}-\d+$")
+                self.assertGreater(len(entry["statement"].strip()), 20)
+                self.assertIn("expired_at", entry)
+                self.assertTrue(entry["paths"], f"{entry['id']}: unscoped ignore")
+                for ignored_path in entry["paths"]:
+                    self.assertTrue(
+                        ignored_path.startswith("app/node_modules/"),
+                        f"{entry['id']}: only upstream-pinned app deps may be "
+                        f"accepted, not {ignored_path!r} (OS/npm CLI findings "
+                        "must be fixed by the hardening layer instead)",
+                    )
 
     def test_real_pre_push_attestation_is_bound_to_local_publishable_digest(self):
         for job_name in ("api", "playwright"):
@@ -166,6 +207,7 @@ class BuildWorkflowContractTests(unittest.TestCase):
     def test_exact_security_and_publication_order(self):
         required_order = [
             "build",
+            "harden",
             "trivy",
             "trivy_report",
             "trivy_gate",
@@ -211,9 +253,14 @@ class BuildWorkflowContractTests(unittest.TestCase):
                 "--ignore-unfixed",
                 "--severity CRITICAL,HIGH",
                 "--exit-code 1",
+                f"--ignorefile security/accepted-risks-{job_name}.trivyignore.yaml",
                 "${{ steps.meta.outputs.local_image }}",
             ):
                 self.assertIn(required, gate_run)
+            # The SARIF evidence scan must stay complete: accepted risks are
+            # gate policy, not missing evidence.
+            self.assertNotIn("ignorefile", str(trivy.get("with", {})))
+            self.assertNotIn("trivyignores", str(trivy.get("with", {})))
 
     def test_every_existing_registry_publication_path_is_protected_only(self):
         for job_name in ("api", "playwright"):

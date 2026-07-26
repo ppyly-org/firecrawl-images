@@ -1,0 +1,10 @@
+# Accepted-risk gate policy for the Firecrawl Playwright image — applied ONLY
+# to the enforcement gate (--ignorefile); the SARIF evidence scan stays
+# complete. Same scope rules as accepted-risks-api.trivyignore.yaml: entries
+# may only cover upstream-pinned app dependencies; OS-package and bundled-npm
+# findings must be fixed by Dockerfile.hardening instead.
+#
+# Currently empty: every Playwright finding is either a stale base-image OS
+# package or a bundled-npm vendored dependency, all patched by the hardening
+# layer.
+vulnerabilities: []
