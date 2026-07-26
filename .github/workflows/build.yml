@@ -161,24 +161,6 @@ jobs:
             echo "digest=$digest"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Create signed pre-push API build provenance attestation
-        id: prepush_attestation
-        if: ${{ github.ref_protected == true }}
-        uses: actions/attest-build-provenance@v2
-        with:
-          subject-name: ${{ env.API_REPOSITORY }}
-          subject-digest: ${{ steps.subject.outputs.digest }}
-          push-to-registry: false
-
-      - name: Cryptographically verify pre-push API build provenance
-        id: verify_prepush_attestation
-        if: ${{ github.ref_protected == true }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          gh attestation verify 'oci://${{ env.API_REPOSITORY }}@${{ steps.subject.outputs.digest }}' --repo "$GITHUB_REPOSITORY" --bundle '${{ steps.prepush_attestation.outputs.bundle-path }}'
-
       - name: Smoke test API image
         id: smoke
         run: scripts/smoke-images.sh api '${{ steps.meta.outputs.local_image }}'
@@ -190,7 +172,6 @@ jobs:
           path: |
             api-trivy.sarif
             api.spdx.json
-            ${{ steps.prepush_attestation.outputs.bundle-path }}
           if-no-files-found: error
 
       - name: Log in to GHCR
@@ -223,6 +204,18 @@ jobs:
           subject-name: ${{ env.API_REPOSITORY }}
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
+
+      # Runs after publish on purpose: oci:// verification fetches the
+      # manifest from the registry, so this proves exactly what an image
+      # consumer's `gh attestation verify` will see.
+      - name: Verify published API provenance
+        id: verify_published_attestation
+        if: ${{ github.ref_protected == true && steps.push.outputs.digest != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh attestation verify 'oci://${{ env.API_REPOSITORY }}@${{ steps.push.outputs.digest }}' --repo "$GITHUB_REPOSITORY"
 
   playwright:
     name: Verify and publish Playwright
@@ -360,24 +353,6 @@ jobs:
             echo "digest=$digest"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Create signed pre-push Playwright build provenance attestation
-        id: prepush_attestation
-        if: ${{ github.ref_protected == true }}
-        uses: actions/attest-build-provenance@v2
-        with:
-          subject-name: ${{ env.PLAYWRIGHT_REPOSITORY }}
-          subject-digest: ${{ steps.subject.outputs.digest }}
-          push-to-registry: false
-
-      - name: Cryptographically verify pre-push Playwright build provenance
-        id: verify_prepush_attestation
-        if: ${{ github.ref_protected == true }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          gh attestation verify 'oci://${{ env.PLAYWRIGHT_REPOSITORY }}@${{ steps.subject.outputs.digest }}' --repo "$GITHUB_REPOSITORY" --bundle '${{ steps.prepush_attestation.outputs.bundle-path }}'
-
       - name: Smoke test Playwright image
         id: smoke
         run: scripts/smoke-images.sh playwright '${{ steps.meta.outputs.local_image }}'
@@ -389,7 +364,6 @@ jobs:
           path: |
             playwright-trivy.sarif
             playwright.spdx.json
-            ${{ steps.prepush_attestation.outputs.bundle-path }}
           if-no-files-found: error
 
       - name: Log in to GHCR
@@ -422,6 +396,18 @@ jobs:
           subject-name: ${{ env.PLAYWRIGHT_REPOSITORY }}
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
+
+      # Runs after publish on purpose: oci:// verification fetches the
+      # manifest from the registry, so this proves exactly what an image
+      # consumer's `gh attestation verify` will see.
+      - name: Verify published Playwright provenance
+        id: verify_published_attestation
+        if: ${{ github.ref_protected == true && steps.push.outputs.digest != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh attestation verify 'oci://${{ env.PLAYWRIGHT_REPOSITORY }}@${{ steps.push.outputs.digest }}' --repo "$GITHUB_REPOSITORY"
 
   # Intentionally impossible until Task 8 evidence exists and Task 9 enables it.
   # This job neither blocks nor is needed by the independently publishable images.
