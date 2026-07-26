@@ -18,13 +18,16 @@ case "$component" in
     docker run --rm --entrypoint /bin/sh "$image" -ec '
       test -s /app/dist/src/harness.js
       test -s /app/sharedLibs/go-html-to-md/libhtml-to-markdown.so
+      ! command -v npm
       node --version
       node -e "require(\"./dist/src/config.js\")"
     '
     ;;
   playwright)
+    [[ "$(docker image inspect --format '{{json .Config.Cmd}}' "$image")" == '["node","dist/api.js"]' ]]
     docker run --rm --entrypoint /bin/sh "$image" -ec '
       test -s /usr/src/app/dist/api.js
+      ! command -v npm
       node --version
       node -e '\''
         const fs = require("fs");

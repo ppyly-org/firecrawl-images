@@ -99,9 +99,8 @@ jobs:
         id: harden
         run: >-
           docker build
-          --file Dockerfile.hardening
+          --file Dockerfile.hardening.api
           --build-arg 'BASE_IMAGE=${{ steps.meta.outputs.upstream_image }}'
-          --build-arg 'NPM_MAJOR=^11'
           --tag '${{ steps.meta.outputs.local_image }}'
           --tag '${{ env.API_REPOSITORY }}:${{ steps.meta.outputs.version }}'
           --tag "${API_REPOSITORY}:sha-${GITHUB_SHA}"
@@ -291,16 +290,16 @@ jobs:
           tags: |
             ${{ steps.meta.outputs.upstream_image }}
 
-      # node:18 cannot run npm 11 — NPM_MAJOR stays at the newest major that
-      # still supports the upstream base's Node runtime. Plain docker build:
-      # the buildx container builder cannot FROM a daemon-loaded local image.
+      # Fixes stale base-image OS packages and drops the bundled npm CLI
+      # (CMD becomes the literal expansion of upstream's `npm start`). Plain
+      # docker build: the buildx container builder cannot FROM a
+      # daemon-loaded local image.
       - name: Apply Playwright security hardening layer
         id: harden
         run: >-
           docker build
-          --file Dockerfile.hardening
+          --file Dockerfile.hardening.playwright
           --build-arg 'BASE_IMAGE=${{ steps.meta.outputs.upstream_image }}'
-          --build-arg 'NPM_MAJOR=^10'
           --tag '${{ steps.meta.outputs.local_image }}'
           --tag '${{ env.PLAYWRIGHT_REPOSITORY }}:${{ steps.meta.outputs.version }}'
           --tag "${PLAYWRIGHT_REPOSITORY}:sha-${GITHUB_SHA}"

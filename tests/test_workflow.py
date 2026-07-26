@@ -155,15 +155,34 @@ class BuildWorkflowContractTests(unittest.TestCase):
             harden_run = harden["run"]
             self.assertNotIn("uses", harden)
             self.assertIn("docker build", harden_run)
-            self.assertIn("--file Dockerfile.hardening", harden_run)
+            self.assertIn(f"--file Dockerfile.hardening.{job_name}", harden_run)
             self.assertIn(
                 "--build-arg 'BASE_IMAGE=${{ steps.meta.outputs.upstream_image }}'",
                 harden_run,
             )
-            self.assertRegex(harden_run, r"--build-arg 'NPM_MAJOR=\^\d+'")
             self.assertIn("--tag '${{ steps.meta.outputs.local_image }}'", harden_run)
             self.assertNotIn("vendor/firecrawl", harden_run)
             self.assertNotIn(".generated", harden_run)
+
+    def test_hardening_dockerfiles_patch_os_and_drop_npm(self):
+        smoke = (ROOT / "scripts" / "smoke-images.sh").read_text(encoding="utf-8")
+        self.assertIn("! command -v npm", smoke)
+        self.assertIn('"node","dist/api.js"', smoke)
+        for job_name in ("api", "playwright"):
+            dockerfile = ROOT / f"Dockerfile.hardening.{job_name}"
+            content = dockerfile.read_text(encoding="utf-8")
+            self.assertIn("ARG BASE_IMAGE", content)
+            self.assertIn("FROM ${BASE_IMAGE}", content)
+            self.assertIn("dist-upgrade", content)
+            self.assertIn("rm -rf /usr/local/lib/node_modules/npm", content)
+            # No other build inputs: hardening must stay a pure derivative.
+            self.assertNotIn("COPY", content)
+            self.assertNotIn("ADD", content)
+        api = (ROOT / "Dockerfile.hardening.api").read_text(encoding="utf-8")
+        self.assertNotRegex(api, r"(?m)^CMD", "API must keep upstream's CMD")
+        playwright = (ROOT / "Dockerfile.hardening.playwright").read_text(encoding="utf-8")
+        # Literal expansion of upstream's `npm start`, which needs npm gone.
+        self.assertIn('CMD ["node", "dist/api.js"]', playwright)
 
     def test_accepted_risk_files_are_scoped_justified_and_expiring(self):
         for job_name in ("api", "playwright"):
