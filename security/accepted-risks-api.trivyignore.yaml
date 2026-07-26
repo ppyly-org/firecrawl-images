@@ -1,0 +1,90 @@
+# Accepted-risk gate policy for the Firecrawl API image — applied ONLY to the
+# enforcement gate (--ignorefile); the SARIF evidence scan stays complete.
+#
+# Scope rules (enforced by tests/test_workflow.py):
+#   - every entry must be path-scoped to app/node_modules/ — the deps pinned
+#     by upstream Firecrawl's lockfile, unfixable without a fork;
+#   - OS-package and bundled-npm-CLI findings must never appear here — the
+#     Dockerfile.hardening layer fixes those properly;
+#   - every entry must carry a justification and an expiry date. Expiry makes
+#     the gate fail again, forcing a re-review against the then-current
+#     upstream release (Renovate PRs new releases automatically).
+#
+# Context for the acceptance: private single-tenant deployment, TLS ingress
+# restricted to trusted LAN/Tailscale CIDRs, no untrusted callers.
+vulnerabilities:
+  - id: CVE-2026-13149
+    paths:
+      - "app/node_modules/.pnpm/brace-expansion@*/**"
+    statement: >-
+      brace-expansion ReDoS via exponential-time patterns. Reachable only
+      through glob patterns supplied by the application itself, not by
+      callers; DoS-class in a trusted-network single-tenant service.
+    expired_at: 2026-10-31
+  - id: CVE-2026-14257
+    paths:
+      - "app/node_modules/.pnpm/brace-expansion@*/**"
+    statement: >-
+      brace-expansion DoS via crafted patterns; same internal-only pattern
+      source and DoS-only impact as CVE-2026-13149.
+    expired_at: 2026-10-31
+  - id: CVE-2026-13676
+    paths:
+      - "app/node_modules/.pnpm/fast-uri@*/**"
+    statement: >-
+      fast-uri Unicode-hostname canonicalization policy bypass. Firecrawl's
+      SSRF guard for private/metadata targets is exercised by our deployment
+      acceptance tests (Task 19); ingress is limited to trusted callers.
+    expired_at: 2026-10-31
+  - id: CVE-2026-16221
+    paths:
+      - "app/node_modules/.pnpm/fast-uri@*/**"
+    statement: >-
+      fast-uri parsing flaw in the same component and threat model as
+      CVE-2026-13676; trusted-caller deployment, SSRF checks covered by
+      deployment acceptance tests.
+    expired_at: 2026-10-31
+  - id: CVE-2026-59869
+    paths:
+      - "app/node_modules/.pnpm/js-yaml@*/**"
+    statement: >-
+      js-yaml DoS via crafted YAML documents. The API does not accept YAML
+      from callers; YAML parsing is limited to internal configuration.
+    expired_at: 2026-10-31
+  - id: CVE-2026-5079
+    paths:
+      - "app/node_modules/.pnpm/multer@*/**"
+    statement: >-
+      multer DoS via deeply nested multipart field names. Upload endpoints
+      are only reachable by trusted LAN/Tailscale clients; DoS-only impact.
+    expired_at: 2026-10-31
+  - id: CVE-2026-50289
+    paths:
+      - "app/node_modules/.pnpm/systeminformation@*/**"
+    statement: >-
+      systeminformation flaw used by Firecrawl only for local host metrics;
+      no caller-controlled input reaches it.
+    expired_at: 2026-10-31
+  - id: CVE-2026-12151
+    paths:
+      - "app/node_modules/.pnpm/undici@*/**"
+    statement: >-
+      undici unbounded WebSocket memory growth (DoS). Outbound scraping
+      client; DoS-only impact bounded by container memory limits at deploy
+      time.
+    expired_at: 2026-10-31
+  - id: CVE-2026-6734
+    paths:
+      - "app/node_modules/.pnpm/undici@*/**"
+    statement: >-
+      undici Socks5ProxyAgent data-integrity issue. The deployment configures
+      no SOCKS5 proxy, so the vulnerable code path is not exercised.
+    expired_at: 2026-10-31
+  - id: CVE-2026-9697
+    paths:
+      - "app/node_modules/.pnpm/undici@*/**"
+    statement: >-
+      undici MITM via ignored TLS options with SOCKS5 proxy. The deployment
+      configures no SOCKS5 proxy, so the vulnerable code path is not
+      exercised.
+    expired_at: 2026-10-31

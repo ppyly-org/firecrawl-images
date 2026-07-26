@@ -1,0 +1,44 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "enabledManagers": [
+    "custom.regex"
+  ],
+  "includePaths": [
+    "UPSTREAM_VERSION"
+  ],
+  "automerge": false,
+  "dependencyDashboard": true,
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^UPSTREAM_VERSION$/"
+      ],
+      "matchStrings": [
+        "(?<currentValue>v\\d+\\.\\d+\\.\\d+)(?:\\n# renovate: datasource=github-releases depName=firecrawl/firecrawl)?"
+      ],
+      "depNameTemplate": "firecrawl/firecrawl",
+      "datasourceTemplate": "github-releases",
+      "versioningTemplate": "semver",
+      "extractVersionTemplate": "^v(?<version>.*)$"
+    }
+  ],
+  "packageRules": [
+    {
+      "matchManagers": [
+        "custom.regex"
+      ],
+      "matchFileNames": [
+        "UPSTREAM_VERSION"
+      ],
+      "matchDepNames": [
+        "firecrawl/firecrawl"
+      ],
+      "enabled": true,
+      "automerge": false,
+      "rangeStrategy": "replace",
+      "commitMessageTopic": "Firecrawl upstream",
+      "prCreation": "immediate"
+    }
+  ]
+}

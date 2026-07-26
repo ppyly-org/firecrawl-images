@@ -1,0 +1,438 @@
+name: Build verified Firecrawl images
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      task8_evidence:
+        description: Immutable Task 8 live-rollout evidence digest (reserved; certification remains blocked)
+        required: false
+        type: string
+      pg_cron_digest:
+        description: Published pg_cron sha256 digest (reserved; certification remains blocked)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  API_REPOSITORY: ghcr.io/ppyly-org/firecrawl-api
+  PLAYWRIGHT_REPOSITORY: ghcr.io/ppyly-org/firecrawl-playwright
+
+jobs:
+  api:
+    name: Verify and publish API
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - name: Check out image repository
+        uses: actions/checkout@v4
+
+      - name: Run repository tests
+        run: |
+          set -euo pipefail
+          scripts/fetch-upstream.sh
+          python3 -m unittest tests/test_workflow.py -v
+          for test_script in tests/*.sh; do bash "$test_script"; done
+
+      - name: Prepare exact source metadata
+        id: meta
+        run: |
+          set -euo pipefail
+          version="$(tr -d '\n' < UPSTREAM_VERSION)"
+          commit="$(tr -d '\n' < UPSTREAM_COMMIT)"
+          [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$commit" =~ ^[0-9a-f]{40}$ ]]
+          {
+            echo "version=$version"
+            echo "commit=$commit"
+            echo "upstream_image=local/firecrawl-api-upstream:${GITHUB_SHA}"
+            echo "local_image=local/firecrawl-api:${GITHUB_SHA}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Materialize pristine exact-commit API context
+        id: materialize
+        run: |
+          set -euo pipefail
+          scripts/fetch-upstream.sh
+          commit="$(tr -d '\n' < UPSTREAM_COMMIT)"
+          git -C vendor/firecrawl cat-file -e "${commit}^{commit}"
+          # materialize-upstream uses git archive UPSTREAM_COMMIT as its sole input.
+          scripts/materialize-upstream.sh
+          test ! -e .generated/firecrawl/.git
+          test -f .generated/firecrawl/apps/api/Dockerfile
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Set up crane
+        uses: imjasonh/setup-crane@v0.4
+
+      - name: Build API locally without pushing
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .generated/firecrawl/apps/api
+          file: .generated/firecrawl/apps/api/Dockerfile
+          load: true
+          push: false
+          tags: |
+            ${{ steps.meta.outputs.upstream_image }}
+
+      # Fixes what upstream does not pin on purpose (stale base-image OS
+      # packages, bundled npm CLI); the scanned/attested/published image is
+      # exclusively this hardened derivative. Plain docker build: the buildx
+      # container builder cannot FROM a daemon-loaded local image.
+      - name: Apply API security hardening layer
+        id: harden
+        run: >-
+          docker build
+          --file Dockerfile.hardening.api
+          --build-arg 'BASE_IMAGE=${{ steps.meta.outputs.upstream_image }}'
+          --tag '${{ steps.meta.outputs.local_image }}'
+          --tag '${{ env.API_REPOSITORY }}:${{ steps.meta.outputs.version }}'
+          --tag "${API_REPOSITORY}:sha-${GITHUB_SHA}"
+          .
+
+      - name: Run Trivy vulnerability scan
+        id: trivy
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ steps.meta.outputs.local_image }}
+          format: sarif
+          output: api-trivy.sarif
+          severity: CRITICAL,HIGH
+          exit-code: "0"
+          ignore-unfixed: true
+          scanners: vuln
+          limit-severities-for-sarif: true
+
+      - name: Preserve API vulnerability evidence
+        id: trivy_report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: firecrawl-api-trivy-${{ github.sha }}
+          path: api-trivy.sarif
+          if-no-files-found: error
+
+      - name: Enforce API vulnerability gate
+        id: trivy_gate
+        run: >-
+          trivy image
+          --cache-dir .cache/trivy
+          --scanners vuln
+          --ignore-unfixed
+          --severity CRITICAL,HIGH
+          --exit-code 1
+          --ignorefile security/accepted-risks-api.trivyignore.yaml
+          '${{ steps.meta.outputs.local_image }}'
+
+      - name: Generate API SBOM
+        id: sbom
+        uses: anchore/sbom-action@v0.20.6
+        with:
+          image: ${{ steps.meta.outputs.local_image }}
+          format: spdx-json
+          output-file: api.spdx.json
+          upload-artifact: false
+
+      - name: Materialize exact local publishable OCI subject
+        id: subject
+        run: |
+          set -euo pipefail
+          docker save '${{ steps.meta.outputs.local_image }}' --output api-image.tar
+          digest="$(crane digest --tarball api-image.tar)"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          {
+            echo "archive=api-image.tar"
+            echo "digest=$digest"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create signed pre-push API build provenance attestation
+        id: prepush_attestation
+        if: ${{ github.ref_protected == true }}
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.API_REPOSITORY }}
+          subject-digest: ${{ steps.subject.outputs.digest }}
+          push-to-registry: false
+
+      - name: Cryptographically verify pre-push API build provenance
+        id: verify_prepush_attestation
+        if: ${{ github.ref_protected == true }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh attestation verify 'oci://${{ env.API_REPOSITORY }}@${{ steps.subject.outputs.digest }}' --repo "$GITHUB_REPOSITORY" --bundle '${{ steps.prepush_attestation.outputs.bundle-path }}'
+
+      - name: Smoke test API image
+        id: smoke
+        run: scripts/smoke-images.sh api '${{ steps.meta.outputs.local_image }}'
+
+      - name: Upload pre-push API security evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: firecrawl-api-security-evidence-${{ github.sha }}
+          path: |
+            api-trivy.sarif
+            api.spdx.json
+            ${{ steps.prepush_attestation.outputs.bundle-path }}
+          if-no-files-found: error
+
+      - name: Log in to private GHCR
+        id: login
+        if: ${{ github.ref_protected == true }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish verified API archive only to private GHCR
+        id: push
+        if: ${{ github.ref_protected == true }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          scripts/publish-private-ghcr.sh
+          '${{ steps.subject.outputs.archive }}'
+          '${{ env.API_REPOSITORY }}'
+          '${{ steps.meta.outputs.version }}'
+          "sha-${GITHUB_SHA}"
+          '${{ steps.subject.outputs.digest }}'
+
+      - name: Attest published API digest
+        id: postpush_attestation
+        if: ${{ github.ref_protected == true && steps.push.outputs.digest != '' }}
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.API_REPOSITORY }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+  playwright:
+    name: Verify and publish Playwright
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - name: Check out image repository
+        uses: actions/checkout@v4
+
+      - name: Run repository tests
+        run: |
+          set -euo pipefail
+          scripts/fetch-upstream.sh
+          python3 -m unittest tests/test_workflow.py -v
+          for test_script in tests/*.sh; do bash "$test_script"; done
+
+      - name: Prepare exact source metadata
+        id: meta
+        run: |
+          set -euo pipefail
+          version="$(tr -d '\n' < UPSTREAM_VERSION)"
+          commit="$(tr -d '\n' < UPSTREAM_COMMIT)"
+          [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$commit" =~ ^[0-9a-f]{40}$ ]]
+          {
+            echo "version=$version"
+            echo "commit=$commit"
+            echo "upstream_image=local/firecrawl-playwright-upstream:${GITHUB_SHA}"
+            echo "local_image=local/firecrawl-playwright:${GITHUB_SHA}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Materialize pristine exact-commit Playwright context
+        id: materialize
+        run: |
+          set -euo pipefail
+          scripts/fetch-upstream.sh
+          commit="$(tr -d '\n' < UPSTREAM_COMMIT)"
+          git -C vendor/firecrawl cat-file -e "${commit}^{commit}"
+          # materialize-upstream uses git archive UPSTREAM_COMMIT as its sole input.
+          scripts/materialize-upstream.sh
+          test ! -e .generated/firecrawl/.git
+          test -f .generated/firecrawl/apps/playwright-service-ts/Dockerfile
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Set up crane
+        uses: imjasonh/setup-crane@v0.4
+
+      - name: Build Playwright locally without pushing
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .generated/firecrawl/apps/playwright-service-ts
+          file: .generated/firecrawl/apps/playwright-service-ts/Dockerfile
+          build-args: PORT=3000
+          load: true
+          push: false
+          tags: |
+            ${{ steps.meta.outputs.upstream_image }}
+
+      # Fixes stale base-image OS packages and drops the bundled npm CLI
+      # (CMD becomes the literal expansion of upstream's `npm start`). Plain
+      # docker build: the buildx container builder cannot FROM a
+      # daemon-loaded local image.
+      - name: Apply Playwright security hardening layer
+        id: harden
+        run: >-
+          docker build
+          --file Dockerfile.hardening.playwright
+          --build-arg 'BASE_IMAGE=${{ steps.meta.outputs.upstream_image }}'
+          --tag '${{ steps.meta.outputs.local_image }}'
+          --tag '${{ env.PLAYWRIGHT_REPOSITORY }}:${{ steps.meta.outputs.version }}'
+          --tag "${PLAYWRIGHT_REPOSITORY}:sha-${GITHUB_SHA}"
+          .
+
+      - name: Run Trivy vulnerability scan
+        id: trivy
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ steps.meta.outputs.local_image }}
+          format: sarif
+          output: playwright-trivy.sarif
+          severity: CRITICAL,HIGH
+          exit-code: "0"
+          ignore-unfixed: true
+          scanners: vuln
+          limit-severities-for-sarif: true
+
+      - name: Preserve Playwright vulnerability evidence
+        id: trivy_report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: firecrawl-playwright-trivy-${{ github.sha }}
+          path: playwright-trivy.sarif
+          if-no-files-found: error
+
+      - name: Enforce Playwright vulnerability gate
+        id: trivy_gate
+        run: >-
+          trivy image
+          --cache-dir .cache/trivy
+          --scanners vuln
+          --ignore-unfixed
+          --severity CRITICAL,HIGH
+          --exit-code 1
+          --ignorefile security/accepted-risks-playwright.trivyignore.yaml
+          '${{ steps.meta.outputs.local_image }}'
+
+      - name: Generate Playwright SBOM
+        id: sbom
+        uses: anchore/sbom-action@v0.20.6
+        with:
+          image: ${{ steps.meta.outputs.local_image }}
+          format: spdx-json
+          output-file: playwright.spdx.json
+          upload-artifact: false
+
+      - name: Materialize exact local publishable OCI subject
+        id: subject
+        run: |
+          set -euo pipefail
+          docker save '${{ steps.meta.outputs.local_image }}' --output playwright-image.tar
+          digest="$(crane digest --tarball playwright-image.tar)"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          {
+            echo "archive=playwright-image.tar"
+            echo "digest=$digest"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create signed pre-push Playwright build provenance attestation
+        id: prepush_attestation
+        if: ${{ github.ref_protected == true }}
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.PLAYWRIGHT_REPOSITORY }}
+          subject-digest: ${{ steps.subject.outputs.digest }}
+          push-to-registry: false
+
+      - name: Cryptographically verify pre-push Playwright build provenance
+        id: verify_prepush_attestation
+        if: ${{ github.ref_protected == true }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh attestation verify 'oci://${{ env.PLAYWRIGHT_REPOSITORY }}@${{ steps.subject.outputs.digest }}' --repo "$GITHUB_REPOSITORY" --bundle '${{ steps.prepush_attestation.outputs.bundle-path }}'
+
+      - name: Smoke test Playwright image
+        id: smoke
+        run: scripts/smoke-images.sh playwright '${{ steps.meta.outputs.local_image }}'
+
+      - name: Upload pre-push Playwright security evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: firecrawl-playwright-security-evidence-${{ github.sha }}
+          path: |
+            playwright-trivy.sarif
+            playwright.spdx.json
+            ${{ steps.prepush_attestation.outputs.bundle-path }}
+          if-no-files-found: error
+
+      - name: Log in to private GHCR
+        id: login
+        if: ${{ github.ref_protected == true }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish verified Playwright archive only to private GHCR
+        id: push
+        if: ${{ github.ref_protected == true }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          scripts/publish-private-ghcr.sh
+          '${{ steps.subject.outputs.archive }}'
+          '${{ env.PLAYWRIGHT_REPOSITORY }}'
+          '${{ steps.meta.outputs.version }}'
+          "sha-${GITHUB_SHA}"
+          '${{ steps.subject.outputs.digest }}'
+
+      - name: Attest published Playwright digest
+        id: postpush_attestation
+        if: ${{ github.ref_protected == true && steps.push.outputs.digest != '' }}
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.PLAYWRIGHT_REPOSITORY }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+  # Intentionally impossible until Task 8 evidence exists and Task 9 enables it.
+  # This job neither blocks nor is needed by the independently publishable images.
+  migration-certification:
+    name: Migration certification (blocked pending Task 8)
+    if: ${{ false && github.event_name == 'workflow_dispatch' && inputs.task8_evidence != '' && startsWith(inputs.pg_cron_digest, 'sha256:') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Explain certification gate
+        run: |
+          echo "Migration certification remains blocked until Task 8 live-rollout evidence is reviewed."
+          exit 1
