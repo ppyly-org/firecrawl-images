@@ -203,7 +203,10 @@ class BuildWorkflowContractTests(unittest.TestCase):
                         "must be fixed by the hardening layer instead)",
                     )
 
-    def test_real_pre_push_attestation_is_bound_to_local_publishable_digest(self):
+    # Verification must run AFTER publish: `gh attestation verify oci://`
+    # fetches the manifest from the registry to compute the digest, so a
+    # pre-push verify can only ever see MANIFEST_UNKNOWN.
+    def test_published_attestation_is_bound_to_pushed_digest_and_verified(self):
         for job_name in ("api", "playwright"):
             job = self.jobs[job_name]
             subject = step_by_id(job, "subject")
@@ -214,18 +217,24 @@ class BuildWorkflowContractTests(unittest.TestCase):
             self.assertIn('echo "digest=$digest"', subject_run)
             self.assertIn('>> "$GITHUB_OUTPUT"', subject_run)
 
-            attest = step_by_id(job, "prepush_attestation")
+            attest = step_by_id(job, "postpush_attestation")
             self.assertEqual(attest["uses"], "actions/attest-build-provenance@v2")
-            self.assertEqual(attest["with"]["subject-digest"], "${{ steps.subject.outputs.digest }}")
-            self.assertFalse(attest["with"]["push-to-registry"])
+            self.assertEqual(attest["with"]["subject-digest"], "${{ steps.push.outputs.digest }}")
+            self.assertTrue(attest["with"]["push-to-registry"])
             assert_protected_only(self, attest)
 
-            verify = step_by_id(job, "verify_prepush_attestation")
+            verify = step_by_id(job, "verify_published_attestation")
             verify_run = verify["run"]
             self.assertIn("gh attestation verify", verify_run)
-            self.assertIn("${{ steps.prepush_attestation.outputs.bundle-path }}", verify_run)
-            self.assertIn("${{ steps.subject.outputs.digest }}", verify_run)
+            self.assertIn("${{ steps.push.outputs.digest }}", verify_run)
+            # No --bundle: verify against GitHub's attestation store, exactly
+            # what a consumer of the published image will do.
+            self.assertNotIn("--bundle", verify_run)
             assert_protected_only(self, verify)
+            self.assertGreater(
+                step_index(job, "verify_published_attestation"),
+                step_index(job, "postpush_attestation"),
+            )
 
     def test_exact_security_and_publication_order(self):
         required_order = [
@@ -236,18 +245,17 @@ class BuildWorkflowContractTests(unittest.TestCase):
             "trivy_gate",
             "sbom",
             "subject",
-            "prepush_attestation",
-            "verify_prepush_attestation",
             "smoke",
             "login",
             "push",
             "postpush_attestation",
+            "verify_published_attestation",
         ]
         for job_name in ("api", "playwright"):
             job = self.jobs[job_name]
             indices = [step_index(job, step_id) for step_id in required_order]
             self.assertEqual(indices, sorted(indices), f"{job_name}: unsafe step order")
-            for step_id in ("prepush_attestation", "verify_prepush_attestation", "login", "push", "postpush_attestation"):
+            for step_id in ("login", "push", "postpush_attestation", "verify_published_attestation"):
                 assert_protected_only(self, step_by_id(job, step_id))
 
     def test_trivy_sarif_is_preserved_before_fail_closed_enforcement(self):
