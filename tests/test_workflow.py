@@ -61,9 +61,13 @@ def step_index(job, step_id):
     return ids.index(step_id)
 
 
+# Free-plan private repos cannot protect branches, so ref_protected is
+# unusable; the gate is a direct-push-to-main check instead (PR and fork
+# runs can never publish, and only collaborators can push main).
 def assert_protected_only(testcase, step):
     condition = re.sub(r"\s+", " ", str(step.get("if", "")).strip())
-    testcase.assertIn("github.ref_protected == true", condition)
+    testcase.assertIn("github.event_name == 'push'", condition)
+    testcase.assertIn("github.ref == 'refs/heads/main'", condition)
     testcase.assertNotIn("||", condition)
     testcase.assertNotIn("github.ref_type", condition)
 
