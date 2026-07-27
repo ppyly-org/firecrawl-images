@@ -1,5 +1,60 @@
-# Accepted-risk gate policy for the migration image — currently empty. OS CVEs are
-# patched at build time (migration: dist-upgrade; pg_cron: scratch base has no
-# OS packages). Same scope rules as accepted-risks-api: any future entry must
-# be justified and carry an expiry.
-vulnerabilities: []
+# Accepted-risk gate policy for the NuQ migration image.
+#
+# The image is psql-only: it runs `psql --file /migrations/nuq.sql` once, as a
+# Kubernetes Job, and exits. The findings below are all Python packages the
+# CNPG base image ships for its barman-cloud / instance-manager tooling
+# (usr/local/lib/python3.9/dist-packages) — that tooling is never invoked in
+# this image's single psql run, so the vulnerable code paths are unreachable.
+# OS-package CVEs are patched at build time (apt dist-upgrade in the
+# Dockerfile). Each entry is path-scoped and expires so the gate forces a
+# re-review against the then-current CNPG base.
+vulnerabilities:
+  - id: GHSA-537c-gmf6-5ccf
+    paths:
+      - "usr/local/lib/python3.9/dist-packages/cryptography-*/METADATA"
+    statement: >-
+      cryptography wheel bundles a vulnerable OpenSSL. Part of the CNPG base's
+      barman-cloud tooling; not invoked by the psql-only migration Job.
+    expired_at: 2026-10-31
+  - id: CVE-2026-59885
+    paths:
+      - "usr/local/lib/python3.9/dist-packages/pyasn1-*/METADATA"
+    statement: >-
+      pyasn1 DoS via crafted ASN.1. CNPG barman-cloud dependency; unreachable
+      in a psql-only migration run.
+    expired_at: 2026-10-31
+  - id: CVE-2026-59886
+    paths:
+      - "usr/local/lib/python3.9/dist-packages/pyasn1-*/METADATA"
+    statement: >-
+      pyasn1 DoS via crafted ASN.1 REAL. CNPG barman-cloud dependency;
+      unreachable in a psql-only migration run.
+    expired_at: 2026-10-31
+  - id: CVE-2025-66418
+    paths:
+      - "usr/local/lib/python3.9/dist-packages/urllib3-*/METADATA"
+    statement: >-
+      urllib3 unbounded decompression (DoS). CNPG barman-cloud dependency; no
+      HTTP is performed by the psql-only migration Job.
+    expired_at: 2026-10-31
+  - id: CVE-2025-66471
+    paths:
+      - "usr/local/lib/python3.9/dist-packages/urllib3-*/METADATA"
+    statement: >-
+      urllib3 streaming API mishandling. CNPG barman-cloud dependency; no HTTP
+      in the psql-only migration Job.
+    expired_at: 2026-10-31
+  - id: CVE-2026-21441
+    paths:
+      - "usr/local/lib/python3.9/dist-packages/urllib3-*/METADATA"
+    statement: >-
+      urllib3 decompression-bomb safeguard bypass. CNPG barman-cloud
+      dependency; no HTTP in the psql-only migration Job.
+    expired_at: 2026-10-31
+  - id: CVE-2026-44431
+    paths:
+      - "usr/local/lib/python3.9/dist-packages/urllib3-*/METADATA"
+    statement: >-
+      urllib3 cross-origin info disclosure. CNPG barman-cloud dependency; no
+      HTTP in the psql-only migration Job.
+    expired_at: 2026-10-31
