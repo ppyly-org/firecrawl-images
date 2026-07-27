@@ -1,0 +1,21 @@
+# pg_cron as a CloudNativePG ImageVolume extension for PostgreSQL 18.
+# Repackages the official PGDG postgresql-18-cron package (exact PG18.4 ABI
+# match) into the CNPG extension layout (root-level lib/ + share/), the same
+# shape as the official cloudnative-pg/pgvector image. Mounted read-only by
+# CNPG at /extensions/pg_cron/{lib,share}; no rebuild of the cluster image.
+FROM ghcr.io/cloudnative-pg/postgresql@sha256:8ff3abd13383e619797f974b4fcdda6de0c2cfdad90eb47e1cd95d41fe26bf80 AS extract
+ARG PG_CRON_VERSION=1.6.7-3.pgdg11+1
+USER 0
+RUN set -eux; \
+    apt-get update; \
+    cd /tmp; \
+    apt-get download "postgresql-18-cron=${PG_CRON_VERSION}"; \
+    dpkg-deb -x postgresql-18-cron_*.deb /pgc; \
+    test -f /pgc/usr/lib/postgresql/18/lib/pg_cron.so; \
+    test -f /pgc/usr/share/postgresql/18/extension/pg_cron.control
+
+FROM scratch
+COPY --from=extract /pgc/usr/lib/postgresql/18/lib/pg_cron.so   /lib/pg_cron.so
+COPY --from=extract /pgc/usr/lib/postgresql/18/lib/bitcode/     /lib/bitcode/
+COPY --from=extract /pgc/usr/share/postgresql/18/extension/     /share/extension/
+COPY --from=extract /pgc/usr/share/doc/postgresql-18-cron/      /licenses/pg_cron/

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-  printf 'Usage: %s {api|playwright} IMAGE\n' "$0" >&2
+  printf 'Usage: %s {api|playwright|migration|pgcron} IMAGE\n' "$0" >&2
   exit 2
 }
 
@@ -39,6 +39,24 @@ case "$component" in
         console.log(executable);
       '\''
     '
+    ;;
+  migration)
+    docker run --rm --entrypoint /bin/sh "$image" -ec '
+      psql --version | grep -q "PostgreSQL) 18"
+      test -s /migrations/nuq.sql
+      grep -q "CREATE EXTENSION IF NOT EXISTS pg_cron" /migrations/nuq.sql
+      ! command -v npm 2>/dev/null
+      id -u | grep -qv "^0$"
+    '
+    ;;
+  pgcron)
+    # scratch image: verify the CNPG ImageVolume layout from the exported fs.
+    cid="$(docker create "$image" /nonexistent)"
+    trap 'docker rm -f "$cid" >/dev/null 2>&1' EXIT
+    listing="$(docker export "$cid" | tar -tf -)"
+    printf '%s\n' "$listing" | grep -qx 'lib/pg_cron.so'
+    printf '%s\n' "$listing" | grep -qx 'share/extension/pg_cron.control'
+    printf '%s\n' "$listing" | grep -qE 'share/extension/pg_cron--1\.6\.sql|share/extension/pg_cron--1\.5--1\.6\.sql'
     ;;
   *)
     usage
