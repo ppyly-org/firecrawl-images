@@ -16,8 +16,8 @@ readonly retries="${GHCR_VISIBILITY_RETRIES:-12}"
 readonly retry_delay="${GHCR_VISIBILITY_RETRY_DELAY:-5}"
 
 [[ -f "$archive" ]] || { printf 'Image archive not found.\n' >&2; exit 1; }
-[[ "$repository" =~ ^ghcr\.io/ppyly-org/(firecrawl-api|firecrawl-playwright)$ ]] || usage
-[[ "$version_tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || usage
+[[ "$repository" =~ ^ghcr\.io/ppyly-org/(firecrawl-api|firecrawl-playwright|firecrawl-nuq-migration|pg-cron)$ ]] || usage
+[[ "$version_tag" =~ ^(v[0-9]+\.[0-9]+\.[0-9]+|[0-9]+\.[0-9]+\.[0-9]+-[0-9]+)$ ]] || usage
 [[ "$sha_tag" =~ ^sha-[0-9a-f]{7,64}$ ]] || usage
 [[ "$subject_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || usage
 [[ "$retries" =~ ^[1-9][0-9]*$ ]] || usage

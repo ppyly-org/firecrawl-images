@@ -1,0 +1,5 @@
+# Accepted-risk gate policy for the migration image — currently empty. OS CVEs are
+# patched at build time (migration: dist-upgrade; pg_cron: scratch base has no
+# OS packages). Same scope rules as accepted-risks-api: any future entry must
+# be justified and carry an expiry.
+vulnerabilities: []

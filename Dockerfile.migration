@@ -4,5 +4,10 @@
 # non-root (uid 26) by default. The image only adds nuq.sql; the connection
 # comes entirely from PG* env at run time (see k3s_install_firecrawl migrate).
 FROM ghcr.io/cloudnative-pg/postgresql@sha256:8ff3abd13383e619797f974b4fcdda6de0c2cfdad90eb47e1cd95d41fe26bf80
+# Patch fixable OS CVEs in the base (matches the api/playwright hardening
+# philosophy); postgres itself is unchanged (pinned in the base).
+USER 0
+RUN apt-get update && apt-get -y dist-upgrade && apt-get clean && rm -rf /var/lib/apt/lists/*
+USER 26
 COPY nuq.sql /migrations/nuq.sql
 CMD ["psql", "--set", "ON_ERROR_STOP=1", "--file", "/migrations/nuq.sql"]
