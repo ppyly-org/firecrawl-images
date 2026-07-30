@@ -1,0 +1,29 @@
+# firecrawl-mcp as a remote (streamable HTTP) MCP server in front of the
+# self-hosted Firecrawl API. The project publishes to npm only — there is no
+# official image — so the package is installed at BUILD time into a pinned base
+# and never fetched at container start. npm itself is left behind in the build
+# stage: the runtime needs node, not a package manager.
+FROM node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32 AS build
+ARG MCP_VERSION
+RUN set -eux; \
+    test -n "$MCP_VERSION"; \
+    npm install -g --omit=dev "firecrawl-mcp@${MCP_VERSION}"; \
+    test -d /usr/local/lib/node_modules/firecrawl-mcp; \
+    # Resolve the real entry script so the runtime ENTRYPOINT needs no shim.
+    node -e 'const p=require("/usr/local/lib/node_modules/firecrawl-mcp/package.json");if(!p.bin)throw new Error("no bin in package.json");console.log(JSON.stringify(p.bin))'
+
+FROM node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32
+COPY --from=build /usr/local/lib/node_modules/firecrawl-mcp /usr/local/lib/node_modules/firecrawl-mcp
+# Streamable HTTP transport; FIRECRAWL_API_URL is supplied at deploy time.
+# HOST must be explicit: firecrawl-mcp defaults to binding "localhost", which
+# in this base image resolves to ::1 only — unreachable from outside the
+# container's own netns (e.g. a k8s Service). CLOUD_SERVICE=true would also
+# bind 0.0.0.0 but flips on the package's multi-tenant SaaS auth/safe-mode
+# behaviour, which is wrong for a single-tenant self-hosted deployment.
+ENV HTTP_STREAMABLE_SERVER=true \
+    HOST=0.0.0.0 \
+    PORT=3000 \
+    NODE_ENV=production
+USER 1000:1000
+EXPOSE 3000
+ENTRYPOINT ["node", "/usr/local/lib/node_modules/firecrawl-mcp/dist/index.js"]

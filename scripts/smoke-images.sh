@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-  printf 'Usage: %s {api|playwright|migration|pgcron} IMAGE\n' "$0" >&2
+  printf 'Usage: %s {api|playwright|migration|pgcron|mcp} IMAGE\n' "$0" >&2
   exit 2
 }
 
@@ -57,6 +57,20 @@ case "$component" in
     printf '%s\n' "$listing" | grep -qx 'lib/pg_cron.so'
     printf '%s\n' "$listing" | grep -qx 'share/extension/pg_cron.control'
     printf '%s\n' "$listing" | grep -qE 'share/extension/pg_cron--1\.6\.sql|share/extension/pg_cron--1\.5--1\.6\.sql'
+    ;;
+  mcp)
+    # The server must start, bind, and speak MCP. It exits(1) when neither a
+    # credential nor FIRECRAWL_API_URL is set, so supply a dummy URL: this
+    # asserts startup and protocol, not connectivity to a real Firecrawl.
+    cid="$(docker run -d -e FIRECRAWL_API_URL=http://127.0.0.1:1 -e PORT=3000 "$image")"
+    trap 'docker rm -f "$cid" >/dev/null 2>&1' EXIT
+    for _ in $(seq 1 30); do
+      docker exec "$cid" node -e 'require("net").connect(3000,"127.0.0.1").on("connect",()=>process.exit(0)).on("error",()=>process.exit(1))' && break
+      sleep 1
+    done
+    docker exec "$cid" node -e 'require("net").connect(3000,"127.0.0.1").on("connect",()=>process.exit(0)).on("error",()=>process.exit(1))'
+    # npm must not ship in the runtime image (repo hardening rule).
+    ! docker run --rm --entrypoint /bin/sh "$image" -c 'command -v npm' >/dev/null 2>&1
     ;;
   *)
     usage
