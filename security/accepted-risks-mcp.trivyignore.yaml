@@ -1,0 +1,32 @@
+# Accepted-risk gate policy for the Firecrawl MCP image — applied ONLY to the
+# enforcement gate (--ignorefile); the SARIF evidence scan stays complete.
+#
+# Scope rules mirror accepted-risks-api.trivyignore.yaml:
+#   - every entry must be path-scoped to the app's own vendored dependency
+#     tree under usr/local/lib/node_modules/firecrawl-mcp/node_modules/ —
+#     upstream's pinned deps, unfixable without a fork;
+#   - the npm-CLI vendored findings (tar, brace-expansion, picomatch,
+#     sigstore under usr/local/lib/node_modules/npm/) must never appear here
+#     — npm is removed outright from the runtime stage in Dockerfile.mcp;
+#   - every entry must carry a justification and an expiry date.
+#
+# Context for the acceptance: private single-tenant deployment, TLS ingress
+# restricted to trusted LAN/Tailscale CIDRs, no untrusted callers.
+vulnerabilities:
+  - id: GHSA-gcfj-64vw-6mp9
+    paths:
+      - "usr/local/lib/node_modules/firecrawl-mcp/node_modules/axios/**"
+    statement: >-
+      axios <1.18.0 prototype-pollution-to-proxy-redirect in the Node HTTP
+      adapter: a request interceptor that spreads {...config} can drop the
+      null-prototype hardening, letting a pre-existing Object.prototype
+      pollution primitive elsewhere in the process redirect requests through
+      an attacker proxy. firecrawl-mcp@3.23.0 (latest published release; no
+      newer version exists to pick up axios>=1.18.0) does register one
+      request interceptor, but it only spreads config.headers, not config
+      itself, and only on the managed-hosted-OAuth credential path, which is
+      never reached in this self-hosted single-tenant deployment
+      (FIRECRAWL_API_URL is set, CLOUD_SERVICE is unset). No other
+      prototype-pollution primitive is known in this process. Re-evaluate
+      against each firecrawl-mcp release for an axios bump past 1.18.0.
+    expired_at: 2026-10-31

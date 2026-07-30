@@ -27,6 +27,8 @@ env:
   MIGRATION_REPOSITORY: ghcr.io/ppyly-org/firecrawl-nuq-migration
   PGCRON_REPOSITORY: ghcr.io/ppyly-org/pg-cron
   PGCRON_VERSION: 1.6.7-18
+  MCP_REPOSITORY: ghcr.io/ppyly-org/firecrawl-mcp
+  MCP_VERSION: 3.23.0
 
 jobs:
   api:
@@ -740,6 +742,160 @@ jobs:
         run: |
           set -euo pipefail
           gh attestation verify 'oci://${{ env.PGCRON_REPOSITORY }}@${{ steps.push.outputs.digest }}' --repo "$GITHUB_REPOSITORY"
+
+  mcp:
+    name: Verify and publish MCP server
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - name: Check out image repository
+        uses: actions/checkout@v4
+
+      - name: Prepare metadata
+        id: meta
+        run: |
+          set -euo pipefail
+          version="${MCP_VERSION}"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          {
+            echo "version=$version"
+            echo "local_image=local/firecrawl-mcp:${GITHUB_SHA}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Set up crane
+        uses: imjasonh/setup-crane@v0.4
+
+      - name: Build MCP image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.mcp
+          load: true
+          push: false
+          build-args: |
+            MCP_VERSION=${{ steps.meta.outputs.version }}
+          tags: |
+            ${{ steps.meta.outputs.local_image }}
+            ${{ env.MCP_REPOSITORY }}:${{ steps.meta.outputs.version }}
+            ${{ env.MCP_REPOSITORY }}:sha-${{ github.sha }}
+
+      - name: Run Trivy vulnerability scan
+        id: trivy
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ steps.meta.outputs.local_image }}
+          format: sarif
+          output: mcp-trivy.sarif
+          severity: CRITICAL,HIGH
+          exit-code: "0"
+          ignore-unfixed: true
+          scanners: vuln
+          limit-severities-for-sarif: true
+
+      - name: Preserve MCP vulnerability evidence
+        id: trivy_report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcp-trivy-${{ github.sha }}
+          path: mcp-trivy.sarif
+          if-no-files-found: error
+
+      - name: Enforce MCP vulnerability gate
+        id: trivy_gate
+        run: >-
+          trivy image
+          --cache-dir .cache/trivy
+          --scanners vuln
+          --ignore-unfixed
+          --severity CRITICAL,HIGH
+          --exit-code 1
+          --ignorefile security/accepted-risks-mcp.trivyignore.yaml
+          '${{ steps.meta.outputs.local_image }}'
+
+      - name: Generate MCP SBOM
+        id: sbom
+        uses: anchore/sbom-action@v0.20.6
+        with:
+          image: ${{ steps.meta.outputs.local_image }}
+          format: spdx-json
+          output-file: mcp.spdx.json
+          upload-artifact: false
+
+      - name: Materialize exact local publishable OCI subject
+        id: subject
+        run: |
+          set -euo pipefail
+          docker save '${{ steps.meta.outputs.local_image }}' --output mcp-image.tar
+          digest="$(crane digest --tarball mcp-image.tar)"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          {
+            echo "archive=mcp-image.tar"
+            echo "digest=$digest"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Smoke test MCP image
+        id: smoke
+        run: scripts/smoke-images.sh mcp '${{ steps.meta.outputs.local_image }}'
+
+      - name: Upload pre-push MCP security evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcp-security-evidence-${{ github.sha }}
+          path: |
+            mcp-trivy.sarif
+            mcp.spdx.json
+          if-no-files-found: error
+
+      - name: Log in to GHCR
+        id: login
+        if: ${{ github.ref_protected == true }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish verified MCP archive to GHCR
+        id: push
+        if: ${{ github.ref_protected == true }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          scripts/publish-ghcr.sh
+          '${{ steps.subject.outputs.archive }}'
+          '${{ env.MCP_REPOSITORY }}'
+          '${{ steps.meta.outputs.version }}'
+          "sha-${GITHUB_SHA}"
+          '${{ steps.subject.outputs.digest }}'
+
+      - name: Attest published MCP digest
+        id: postpush_attestation
+        if: ${{ github.ref_protected == true && steps.push.outputs.digest != '' }}
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.MCP_REPOSITORY }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+
+      - name: Verify published MCP provenance
+        id: verify_published_attestation
+        if: ${{ github.ref_protected == true && steps.push.outputs.digest != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh attestation verify 'oci://${{ env.MCP_REPOSITORY }}@${{ steps.push.outputs.digest }}' --repo "$GITHUB_REPOSITORY"
 
   # Intentionally impossible until Task 8 evidence exists and Task 9 enables it.
   # This job neither blocks nor is needed by the independently publishable images.
