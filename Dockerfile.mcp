@@ -1,8 +1,13 @@
 # firecrawl-mcp as a remote (streamable HTTP) MCP server in front of the
 # self-hosted Firecrawl API. The project publishes to npm only — there is no
 # official image — so the package is installed at BUILD time into a pinned base
-# and never fetched at container start. npm itself is left behind in the build
-# stage: the runtime needs node, not a package manager.
+# and never fetched at container start. The runtime needs node, not a package
+# manager: node:22-alpine ships npm itself, so it is removed explicitly below
+# rather than assumed absent — the base image provides it in BOTH stages,
+# multi-staging alone does not drop it. Same rationale as
+# Dockerfile.hardening.api: npm's own vendored deps (tar, brace-expansion,
+# picomatch, sigstore, ...) stay vulnerable across node majors and there is
+# nothing in this image that runs `npm` at container start.
 FROM node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32 AS build
 ARG MCP_VERSION
 RUN set -eux; \
@@ -13,6 +18,7 @@ RUN set -eux; \
     node -e 'const p=require("/usr/local/lib/node_modules/firecrawl-mcp/package.json");if(!p.bin)throw new Error("no bin in package.json");console.log(JSON.stringify(p.bin))'
 
 FROM node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 COPY --from=build /usr/local/lib/node_modules/firecrawl-mcp /usr/local/lib/node_modules/firecrawl-mcp
 # Streamable HTTP transport; FIRECRAWL_API_URL is supplied at deploy time.
 # HOST must be explicit: firecrawl-mcp defaults to binding "localhost", which

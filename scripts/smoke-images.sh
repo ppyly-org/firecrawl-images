@@ -70,7 +70,13 @@ case "$component" in
     done
     docker exec "$cid" node -e 'require("net").connect(3000,"127.0.0.1").on("connect",()=>process.exit(0)).on("error",()=>process.exit(1))'
     # npm must not ship in the runtime image (repo hardening rule).
-    ! docker run --rm --entrypoint /bin/sh "$image" -c 'command -v npm' >/dev/null 2>&1
+    # NOT `! docker run ... command -v npm`: bash's -e does not apply to a
+    # command whose status is inverted by `!`, so that form silently no-ops
+    # when npm IS present instead of failing the script. Assert explicitly.
+    if docker run --rm --entrypoint /bin/sh "$image" -c 'command -v npm' >/dev/null 2>&1; then
+      echo "npm must not be present in the runtime image" >&2
+      exit 1
+    fi
     ;;
   *)
     usage
