@@ -765,6 +765,10 @@ jobs:
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
           {
             echo "version=$version"
+            # publish-ghcr.sh's VERSION_TAG regex requires a `v` prefix or a
+            # `-N` suffix; `version` itself stays the bare npm package pin
+            # since it also feeds the Dockerfile build-arg.
+            echo "image_tag=v${version}"
             echo "local_image=local/firecrawl-mcp:${GITHUB_SHA}"
           } >> "$GITHUB_OUTPUT"
 
@@ -786,7 +790,7 @@ jobs:
             MCP_VERSION=${{ steps.meta.outputs.version }}
           tags: |
             ${{ steps.meta.outputs.local_image }}
-            ${{ env.MCP_REPOSITORY }}:${{ steps.meta.outputs.version }}
+            ${{ env.MCP_REPOSITORY }}:${{ steps.meta.outputs.image_tag }}
             ${{ env.MCP_REPOSITORY }}:sha-${{ github.sha }}
 
       - name: Run Trivy vulnerability scan
@@ -875,7 +879,7 @@ jobs:
           scripts/publish-ghcr.sh
           '${{ steps.subject.outputs.archive }}'
           '${{ env.MCP_REPOSITORY }}'
-          '${{ steps.meta.outputs.version }}'
+          '${{ steps.meta.outputs.image_tag }}'
           "sha-${GITHUB_SHA}"
           '${{ steps.subject.outputs.digest }}'
 
