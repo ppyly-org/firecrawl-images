@@ -1,0 +1,4 @@
+# Accepted, path-scoped, expiring vulnerability exceptions for the MCP image.
+# Empty by design: the gate is strict until a finding forces a documented,
+# expiring exception. Mirror the shape of accepted-risks-api.trivyignore.yaml.
+vulnerabilities: []

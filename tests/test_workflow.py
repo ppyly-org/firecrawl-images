@@ -315,6 +315,22 @@ class BuildWorkflowContractTests(unittest.TestCase):
                 "${{ steps.subject.outputs.digest }}",
             ])
 
+    def test_mcp_job_publishes_only_on_protected_refs_and_attests(self):
+        job = self.jobs["mcp"]
+        push = step_by_id(job, "push")
+        self.assertEqual(push["if"], "${{ github.ref_protected == true }}")
+        self.assertIn("${{ env.MCP_REPOSITORY }}", push["run"])
+        attest = step_by_id(job, "postpush_attestation")
+        self.assertIn("steps.push.outputs.digest", attest["if"])
+        self.assertEqual(
+            attest["with"]["subject-digest"], "${{ steps.push.outputs.digest }}"
+        )
+
+    def test_mcp_gate_runs_before_publication(self):
+        ids = [s.get("id") for s in self.jobs["mcp"]["steps"] if s.get("id")]
+        self.assertLess(ids.index("trivy_gate"), ids.index("push"))
+        self.assertLess(ids.index("smoke"), ids.index("push"))
+
     def test_migration_certification_is_blocked_and_has_no_build_publish_semantics(self):
         migration = self.jobs["migration-certification"]
         condition = migration["if"]
